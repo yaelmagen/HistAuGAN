@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-# import histaugan.networks as networks  # use this line when evaluating the trained model
-import networks
+import histaugan.networks as networks  # use this line when evaluating the trained model
+# import networks
 
 device = torch.device(
     'cuda') if torch.cuda.is_available() else torch.device('cpu')

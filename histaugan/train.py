@@ -1,3 +1,6 @@
+# for local training
+# add a folder 'data' with folders of domains trainA trainB trainC ....
+# add these parameters to the run --dataroot C:\ydata\pangea\HistAuGAN\data  --name train.log --num_domains 2 --batch_size 2 --nThreads 1 --n_ep 10
 import time
 
 import torch
@@ -62,7 +65,8 @@ def main():
 
     # train
     print('\n--- train ---')
-    max_it = 500000
+    # max_it = 500000
+    max_it = 10 # only for testing todo remove
     for ep in range(ep0, opts.n_ep):
         for it, (images, c_org) in enumerate(train_loader):
             if images.size(0) != opts.batch_size:
@@ -91,7 +95,7 @@ def main():
             total_it += 1
             if total_it >= max_it:
                 saver.write_img(-1, model)
-                saver.write_model(-1, model)
+                saver.write_model(-1,total_it, model)
                 break
 
         # decay learning rate
