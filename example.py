@@ -37,9 +37,9 @@ model.to(device)
 model.eval()
 print('--- model loaded ---')
 # choose a sample tile
-domain = np.random.randint(5)
-img_id = np.random.randint(5)
-rows, columns, img_size = 1, 2, 3
+domain = np.random.randint(2)
+img_id = np.random.randint(2)
+rows, columns, img_size = 1, 2, 2
 plt.figure(figsize=(columns * img_size, rows * img_size))
 
 img = torch.load(tiles_dir + tile_names[domain * 5 + img_id]).to(device)
@@ -51,7 +51,7 @@ plt.axis('off')
 z_content = model.enc_c(img.sub(0.5).mul(2).unsqueeze(0))
 
 for i in range(rows * columns - 1):
-    out = generate_hist_augs(img, domain, model, z_content, same_attribute=True, new_domain=i, stats=(mean_domains, std_domains), device=device)
+    out = generate_hist_augs(img, domain, model, z_content, same_attribute=False, new_domain=i, stats=(mean_domains, std_domains), device=device)
 
     plt.subplot(rows, columns, i + 2)
     plt.imshow(out.add(1).div(2).permute(1, 2, 0).cpu())

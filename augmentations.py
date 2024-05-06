@@ -109,11 +109,12 @@ class Args:
     dataroot = 'data'
     gpu = 1
     input_dim = 3
-    nThreads = 4
+    nThreads = 1
     num_domains = 5
     nz = 8
     # resume = False
     resume = 'gan_weights.pth'
+    # resume = 'first.pth'
 
 
 opts = Args()
