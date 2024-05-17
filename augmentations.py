@@ -170,19 +170,21 @@ def generate_hist_augs(img, img_domain, model, z_content=None, same_attribute=Fa
         std = logvar.mul(0.5).exp_().to(device)
         eps = torch.randn((std.size(0), std.size(1))).to(device)
         z_attr = eps.mul(std).add_(mu)
-    elif same_attribute == False and stats is not None and new_domain in range(5):
+    elif same_attribute == False and stats is not None and new_domain in range(Args.num_domains):
         z_attr = (torch.randn((1, 8, )) * \
             stats[1][new_domain] + stats[0][new_domain]).to(device)
     else:
         z_attr = torch.randn((1, 8, )).to(device)
 
     # determine new domain vector
-    if isinstance(new_domain, int) and new_domain in range(5):
-        new_domain = torch.eye(5)[new_domain].unsqueeze(0).to(device)
-    elif isinstance(new_domain, torch.Tensor) and new_domain.shape == (1, 5):
+    if isinstance(new_domain, int) and new_domain in range(Args.num_domains):
+        # new_domain = torch.eye(5)[new_domain].unsqueeze(0).to(device)
+        new_domain = torch.eye(Args.num_domains)[new_domain].unsqueeze(0).to(device)
+    elif isinstance(new_domain, torch.Tensor) and new_domain.shape == (1, Args.num_domains):
         new_domain = new_domain.to(device)
     else:
-        new_domain = torch.eye(5)[np.random.randint(5)].unsqueeze(0).to(device)
+        # new_domain = torch.eye(5)[np.random.randint(5)].unsqueeze(0).to(device)
+        new_domain = torch.eye(Args.num_domains)[np.random.randint(Args.num_domains)].unsqueeze(0).to(device)
 
     # generate new histology image with same content as img
     out = model.gen(z_content, z_attr, new_domain).detach().squeeze(0)  # in range [-1, 1]
