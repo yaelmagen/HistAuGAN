@@ -24,7 +24,7 @@ class Args:
     gpu = 1
     input_dim = 3
     nThreads = 4
-    num_domains = 5
+    num_domains = 2
     nz = 8
     resume = '/home/haicu/sophia.wagner/projects/stain_color/stain_aug/gan_weights.pth'
 
