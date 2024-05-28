@@ -110,11 +110,11 @@ class Args:
     gpu = 1
     input_dim = 3
     nThreads = 1
-    num_domains = 5
+    num_domains = 2
     nz = 8
     # resume = False
-    resume = 'gan_weights.pth'
-    # resume = 'first.pth'
+    # resume = 'gan_weights.pth'
+    resume = 'first1.pth'
 
 
 opts = Args()
