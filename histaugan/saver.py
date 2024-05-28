@@ -62,13 +62,14 @@ class Saver():
         self.writer = SummaryWriter(log_dir=self.display_dir)
 
     # write losses and images to tensorboard
-    def write_display(self, total_it, model):
+    def write_display(self, total_it, model ,mode= "train"):
         if (total_it + 1) % self.display_freq == 0:
             # write loss
             members = [attr for attr in dir(model) if
                        not callable(getattr(model, attr)) and not attr.startswith("__") and 'loss' in attr]
             for m in members:
-                self.writer.add_scalar(m, getattr(model, m), total_it)
+                print(f'm: {m},getattr(model, m): {getattr(model, m)} iter: {total_it}')
+                self.writer.add_scalar(f"{m}_{mode}", getattr(model, m), total_it)
             # write img
             image_dis = torchvision.utils.make_grid(model.image_display,
                                                     nrow=model.image_display.size(0) // 2) / 2 + 0.5

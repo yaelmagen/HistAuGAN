@@ -9,7 +9,7 @@ from datasets import dataset_multi
 from model import MD_multi
 from options import TrainOptions
 from saver import Saver
-
+from torch.utils.data import DataLoader, random_split
 
 def main():
     start = time.time()
@@ -39,8 +39,13 @@ def main():
     print('\n--- load dataset ---')
     # dataset = dataset_multi_from_txt(opts)
     dataset = dataset_multi(opts)
-    train_loader = torch.utils.data.DataLoader(
-        dataset, batch_size=opts.batch_size, shuffle=True, num_workers=opts.nThreads)
+    total_size = len(dataset)
+    train_size = int((1-opts.val_split) * total_size)
+    val_size = total_size - train_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+    train_loader = DataLoader(train_dataset, batch_size=opts.batch_size, shuffle=True, num_workers=opts.nThreads)
+    val_loader = DataLoader(val_dataset, batch_size=opts.batch_size, shuffle=False, num_workers=opts.nThreads)
+
 
     print(f'------ took {int(time.time() - start)}s until here')
 
@@ -65,9 +70,9 @@ def main():
 
     # train
     print('\n--- train ---')
-    # max_it = 500000
-    max_it = 10 # only for testing todo remove
+    max_it = 500000
     for ep in range(ep0, opts.n_ep):
+        model.train()  # Set the model to training mode
         for it, (images, c_org) in enumerate(train_loader):
             if images.size(0) != opts.batch_size:
                 continue
@@ -88,15 +93,38 @@ def main():
 
             # save to display file
             if not opts.no_display_img:
-                saver.write_display(total_it, model)
+                saver.write_display(ep, model)
 
             print('total_it: %d (ep %d, it %d), lr %08f' %
                   (total_it, ep, it, model.gen_opt.param_groups[0]['lr']))
-            total_it += 1
-            if total_it >= max_it:
-                saver.write_img(-1, model)
-                saver.write_model(-1,total_it, model)
-                break
+            # total_it += 1
+            # if total_it >= max_it:
+            #     saver.write_img(-1, model)
+            #     saver.write_model(-1, total_it, model)
+            #     break
+
+        # Validation loop
+        model.eval()  # Set the model to evaluation mode
+        with torch.no_grad():  # Disable gradient computation
+            for it, (images, c_org) in enumerate(val_loader):
+                if images.size(0) != opts.batch_size:
+                    continue
+
+                # input data
+                images = images.cuda(opts.gpu).detach()
+                c_org = c_org.cuda(opts.gpu).detach()
+
+                if (it + 1) % opts.d_iter != 0 and it < len(val_loader) - 2:
+                    model.update_D_content(images, c_org,isVal =True)
+                    continue
+                else:
+                    model.update_D(images, c_org,isVal =True)
+                    model.update_EG(isVal=True)
+
+                # save to display file
+                if not opts.no_display_img:
+                    saver.write_display(ep, model, mode='val')
+
 
         # decay learning rate
         if opts.n_ep_decay > -1:

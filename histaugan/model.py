@@ -236,33 +236,37 @@ class MD_multi(nn.Module):
 
 #         print('forward done')
 
-    def update_D_content(self, image, c_org):
+    def update_D_content(self, image, c_org,isVal =False):
         self.input = image
         self.z_content = self.enc_c.forward(self.input)
         self.disContent_opt.zero_grad()
         pred_cls = self.disContent.forward(self.z_content.detach())
         loss_D_content = self.cls_loss(pred_cls, c_org)
-        loss_D_content.backward()
+        if not isVal :
+            loss_D_content.backward()
         self.disContent_loss = loss_D_content.item()
         nn.utils.clip_grad_norm_(self.disContent.parameters(), 5)
-        self.disContent_opt.step()
+        if not isVal:
+            self.disContent_opt.step()
 
-    def update_D(self, image, c_org):
+    def update_D(self, image, c_org,isVal =False):
         self.input = image
         self.c_org = c_org
         self.forward()
 
         self.dis1_opt.zero_grad()
         self.D1_gan_loss, self.D1_cls_loss = self.backward_D(
-            self.dis1, self.input, self.fake_encoded_img)
-        self.dis1_opt.step()
+            self.dis1, self.input, self.fake_encoded_img,isVal)
+        if not isVal:
+            self.dis1_opt.step()
 
         self.dis2_opt.zero_grad()
         self.D2_gan_loss, self.D2_cls_loss = self.backward_D(
-            self.dis2, self.input, self.fake_random_img)
-        self.dis2_opt.step()
-
-    def backward_D(self, netD, real, fake):
+            self.dis2, self.input, self.fake_random_img,isVal)
+        if not isVal:
+            self.dis2_opt.step()
+        return
+    def backward_D(self, netD, real, fake,isVal =False):
         pred_fake, pred_fake_cls = netD.forward(fake.detach())
         pred_real, pred_real_cls = netD.forward(real)
 
@@ -278,21 +282,23 @@ class MD_multi(nn.Module):
 
         loss_D_cls = self.cls_loss(pred_real_cls, self.c_org)
         loss_D = loss_D_gan + self.opts.lambda_cls * loss_D_cls
-        loss_D.backward()
+        if not isVal:
+            loss_D.backward()
         return loss_D_gan, loss_D_cls
 
-    def update_EG(self):
+    def update_EG(self,isVal= False):
         # update G, Ec, Ea
         self.enc_c_opt.zero_grad()
         self.enc_a_opt.zero_grad()
         self.gen_opt.zero_grad()
-        self.backward_EG()
-        self.backward_G_alone()
-        self.enc_c_opt.step()
-        self.enc_a_opt.step()
-        self.gen_opt.step()
+        self.backward_EG(isVal)
+        self.backward_G_alone(isVal)
+        if not isVal:
+            self.enc_c_opt.step()
+            self.enc_a_opt.step()
+            self.gen_opt.step()
 
-    def backward_EG(self):
+    def backward_EG(self,isVal=False):
         # content Ladv for generator
         loss_G_GAN_content = self.backward_G_GAN_content(self.z_content)
 
@@ -329,8 +335,8 @@ class MD_multi(nn.Module):
         loss_G = loss_G_GAN + loss_G_cls + loss_G_L1_self + \
             loss_G_L1_cc + loss_kl_zc + loss_kl_za
         loss_G += loss_G_GAN_content
-        loss_G.backward(retain_graph=True)
-
+        if not isVal:
+            loss_G.backward(retain_graph=True)
         self.gan_loss = loss_G_GAN.item()
         self.gan_cls_loss = loss_G_cls.item()
         self.gan_loss_content = loss_G_GAN_content.item()
@@ -340,12 +346,15 @@ class MD_multi(nn.Module):
         self.l1_cc_rec_loss = loss_G_L1_cc.item()
         self.G_loss = loss_G.item()
 
+        return
+
+
     def backward_G_GAN_content(self, data):
         pred_cls = self.disContent.forward(data)
         loss_G_content = self.cls_loss(pred_cls, 1-self.c_org)
         return loss_G_content
 
-    def backward_G_alone(self):
+    def backward_G_alone(self,isVal):
         # Ladv for generator
         pred_fake, pred_fake_cls = self.dis2.forward(self.fake_random_img)
         loss_G_GAN2 = 0
@@ -372,7 +381,8 @@ class MD_multi(nn.Module):
                 torch.abs(self.z_attr_random_b - self.z_random)) * 10
 
         loss_z_L1 = loss_z_L1_a + loss_z_L1_b + loss_G_GAN2 + loss_G_cls2
-        loss_z_L1.backward()
+        if not isVal:
+            loss_z_L1.backward()
         self.l1_recon_z_loss = loss_z_L1_a.item() + loss_z_L1_b.item()
         self.gan2_loss = loss_G_GAN2.item()
         self.gan2_cls_loss = loss_G_cls2.item()
