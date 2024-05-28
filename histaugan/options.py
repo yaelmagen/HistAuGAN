@@ -36,9 +36,9 @@ class TrainOptions():
         self.parser.add_argument(
             '--display_freq', type=int, default=10, help='freq (iteration) of display')
         self.parser.add_argument(
-            '--img_save_freq', type=int, default=5, help='freq (epoch) of saving images')
+            '--img_save_freq', type=int, default=50, help='freq (epoch) of saving images')
         self.parser.add_argument(
-            '--model_save_freq', type=int, default=10, help='freq (epoch) of saving models')
+            '--model_save_freq', type=int, default=500, help='freq (epoch) of saving models')
         self.parser.add_argument(
             '--no_display_img', action='store_true', help='specified if no dispaly')
 
@@ -65,6 +65,7 @@ class TrainOptions():
         self.parser.add_argument('--lambda_cls', type=float, default=1.0)
         self.parser.add_argument('--lambda_cls_G', type=float, default=5.0)
         self.parser.add_argument('--gpu', type=int, default=0, help='gpu')
+        self.parser.add_argument('--val_split', type=int, default=0.2, help='validation size in val of 0-1')
 
     def parse(self):
         self.opt = self.parser.parse_args()
