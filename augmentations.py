@@ -166,7 +166,7 @@ def generate_hist_augs(img, img_domain, model, z_content=None, same_attribute=Fa
     # compute attribute
     if same_attribute:
         mu, logvar = model.enc_a.forward(img.sub(0.5).mul(
-            2).unsqueeze(0), torch.eye(5)[img_domain].unsqueeze(0).to(device))
+            2).unsqueeze(0), torch.eye(Args.num_domains)[img_domain].unsqueeze(0).to(device))
         std = logvar.mul(0.5).exp_().to(device)
         eps = torch.randn((std.size(0), std.size(1))).to(device)
         z_attr = eps.mul(std).add_(mu)
