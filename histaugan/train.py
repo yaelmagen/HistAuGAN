@@ -1,6 +1,9 @@
 # for local training
 # add a folder 'data' with folders of domains trainA trainB trainC ....
-# add these parameters to the run --dataroot C:\ydata\pangea\HistAuGAN\data  --name train.log --num_domains 2 --batch_size 2 --nThreads 1 --n_ep 10
+# add these parameters to the run
+# #for vm: --dataroot /data/dataset  --name /data/train_results/yael.log
+# #--name train.log
+# --num_domains 2 --batch_size 2 --nThreads 1 --n_ep 10
 import time
 
 import torch
