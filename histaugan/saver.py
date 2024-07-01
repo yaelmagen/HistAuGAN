@@ -9,6 +9,8 @@ import torch
 from torchvision import transforms
 from augmentations import generate_hist_augs
 
+from pytorch_fid import fid_score
+
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # tensor to PIL Image
@@ -120,8 +122,8 @@ class Saver():
                     #run infrence
                     img = self.load_tensor_image(file_path)
                     img = img.to(device)
-                    new_dommain = 1 if domain == 0 else 0
-                    out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False, new_domain=new_dommain,
+                    new_domain = 1 if domain == 0 else 0
+                    out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False, new_domain=new_domain,
                                              stats=None, device=device)
                     # save
                     if self.overwrite_save:
@@ -129,6 +131,11 @@ class Saver():
                     else:
                         new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_dom_{domain + 1}_ep_{ep}.png')
                     save_imgs([out], [new_file_name], os.path.join(self.save_path, str(domain+1)))
+
+                    # Compute FID score
+                    fid_value = fid_score.calculate_fid_given_paths(file_path, os.path.join(self.save_path, str(domain+1)))
+                    print(f'FID: {fid_value}')
+
 
 
 
