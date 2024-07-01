@@ -5,10 +5,18 @@ import torchvision
 from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
 
+import torch
+from torchvision import transforms
+from augmentations import generate_hist_augs
+
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # tensor to PIL Image
-def tensor2img(img):
-    img = img[0].cpu().float().numpy()
+def tensor2img(img,partial=False):
+    if partial:
+        img = img.cpu().float().numpy()
+    else:
+        img = img[0].cpu().float().numpy()
     if img.shape[0] == 1:
         img = np.tile(img, (3, 1, 1))
     img = (np.transpose(img, (1, 2, 0)) + 1) / 2.0 * 255.0
@@ -16,11 +24,11 @@ def tensor2img(img):
 
 
 # save a set of images
-def save_imgs(imgs, names, path):
+def save_imgs(imgs, names, path,partial=False):
     if not os.path.exists(path):
         os.mkdir(path)
     for img, name in zip(imgs, names):
-        img = tensor2img(img)
+        img = tensor2img(img,partial)
         img = Image.fromarray(img)
         img.save(os.path.join(path, name + '.png'))
 
@@ -43,13 +51,17 @@ def save_concat_imgs(imgs, name, path):
 
 class Saver():
     def __init__(self, opts):
+
         self.display_dir = os.path.join(opts.display_dir, opts.name)
         self.model_dir = os.path.join(opts.result_dir, opts.name)
         self.image_dir = os.path.join(self.model_dir, 'images')
         self.display_freq = opts.display_freq
         self.img_save_freq = opts.img_save_freq
         self.model_save_freq = opts.model_save_freq
-
+        self.save_path = opts.save_path
+        self.save_interval = opts.save_interval
+        self.train_images_path = opts.dataroot
+        self.overwrite_save = opts.overwrite_save
         # make directory
         if not os.path.exists(self.display_dir):
             os.makedirs(self.display_dir)
@@ -68,7 +80,7 @@ class Saver():
             members = [attr for attr in dir(model) if
                        not callable(getattr(model, attr)) and not attr.startswith("__") and 'loss' in attr]
             for m in members:
-                print(f'm: {m},getattr(model, m): {getattr(model, m)} iter: {total_it}')
+                # print(f'm: {m},getattr(model, m): {getattr(model, m)} iter: {total_it}')
                 self.writer.add_scalar(f"{m}_{mode}", getattr(model, m), total_it)
             # write img
             image_dis = torchvision.utils.make_grid(model.image_display,
@@ -93,3 +105,30 @@ class Saver():
             model.save('%s/%05d.pth' % (self.model_dir, ep), ep, total_it)
         elif ep == -1:
             model.save('%s/last.pth' % self.model_dir, ep, total_it)
+
+    def load_tensor_image(self,img_path):
+        img_from_pangea = Image.open(img_path)
+        img_from_pangea = img_from_pangea.convert('RGB')
+        convert_tensor = transforms.ToTensor()
+        return convert_tensor(img_from_pangea)
+    def run_infrence(self,ep,model,dataset):
+        #todo add save infernece for X pictures for every other batch to see progress save timestamp to see progress
+        if (ep + 1) % self.save_interval == 0:
+            for domain,all_domain_paths in enumerate(dataset):
+                for file_path in all_domain_paths:
+
+                    #run infrence
+                    img = self.load_tensor_image(file_path)
+                    img = img.to(device)
+                    new_dommain = 1 if domain == 0 else 0
+                    out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False, new_domain=new_dommain,
+                                             stats=None, device=device)
+                    # save
+                    if self.overwrite_save:
+                        new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_dom_{domain + 1}.png')
+                    else:
+                        new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_dom_{domain + 1}_ep_{ep}.png')
+                    save_imgs([out], [new_file_name], os.path.join(self.save_path, str(domain+1)))
+
+
+

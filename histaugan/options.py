@@ -66,6 +66,9 @@ class TrainOptions():
         self.parser.add_argument('--lambda_cls_G', type=float, default=5.0)
         self.parser.add_argument('--gpu', type=int, default=0, help='gpu')
         self.parser.add_argument('--val_split', type=int, default=0.2, help='validation size in val of 0-1')
+        self.parser.add_argument('--save_path', type=str, default='/data/results_new', help='save path of results')
+        self.parser.add_argument('--save_interval', type=int, default=1, help='interval of saving all data')
+        self.parser.add_argument('--overwrite_save', type=bool, default=True, help='overwrite saved data')
 
     def parse(self):
         self.opt = self.parser.parse_args()

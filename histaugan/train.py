@@ -11,6 +11,7 @@ from options import TrainOptions
 from saver import Saver
 from torch.utils.data import DataLoader, random_split
 
+
 def main():
     start = time.time()
     torch.manual_seed(0)
@@ -40,12 +41,11 @@ def main():
     # dataset = dataset_multi_from_txt(opts)
     dataset = dataset_multi(opts)
     total_size = len(dataset)
-    train_size = int((1-opts.val_split) * total_size)
+    train_size = int((1 - opts.val_split) * total_size)
     val_size = total_size - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     train_loader = DataLoader(train_dataset, batch_size=opts.batch_size, shuffle=True, num_workers=opts.nThreads)
     val_loader = DataLoader(val_dataset, batch_size=opts.batch_size, shuffle=False, num_workers=opts.nThreads)
-
 
     print(f'------ took {int(time.time() - start)}s until here')
 
@@ -115,16 +115,15 @@ def main():
                 c_org = c_org.cuda(opts.gpu).detach()
 
                 if (it + 1) % opts.d_iter != 0 and it < len(val_loader) - 2:
-                    model.update_D_content(images, c_org,isVal =True)
+                    model.update_D_content(images, c_org, isVal=True)
                     continue
                 else:
-                    model.update_D(images, c_org,isVal =True)
+                    model.update_D(images, c_org, isVal=True)
                     model.update_EG(isVal=True)
 
                 # save to display file
                 if not opts.no_display_img:
                     saver.write_display(ep, model, mode='val')
-
 
         # decay learning rate
         if opts.n_ep_decay > -1:
@@ -135,7 +134,7 @@ def main():
 
         # Save network weights
         saver.write_model(ep, total_it, model)
-
+        saver.run_infrence(ep, model, dataset.images)
     return
 
 
