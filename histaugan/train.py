@@ -64,7 +64,7 @@ def main():
     print('start the training at epoch %d' % (ep0))
 
     # saver for display and output
-    saver = Saver(opts)
+    saver = Saver(opts,total_size)
 
     print(f'------ took {int(time.time() - start)}s until here')
 
@@ -134,10 +134,12 @@ def main():
 
         # Save network weights
         saver.write_model(ep, total_it, model)
-        saver.run_infrence(ep, model, dataset.images)
+        saver.run_inference_for_all(ep, model, dataset.images)
+        saver.run_fid(ep)
     return
 
 
 if __name__ == '__main__':
     print('hi')
     main()
+

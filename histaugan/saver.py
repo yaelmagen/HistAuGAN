@@ -1,8 +1,10 @@
+import datetime
 import os
 
 import numpy as np
 import torchvision
 from PIL import Image
+from pytorch_fid import fid_score
 from torch.utils.tensorboard import SummaryWriter
 
 import torch
@@ -50,8 +52,10 @@ def save_concat_imgs(imgs, name, path):
 
 
 class Saver():
-    def __init__(self, opts):
+    def __init__(self, opts,total_size=0):
 
+        self.check_fid = opts.check_fid
+        self.save_interval_track = opts.save_interval_track
         self.display_dir = os.path.join(opts.display_dir, opts.name)
         self.model_dir = os.path.join(opts.result_dir, opts.name)
         self.image_dir = os.path.join(self.model_dir, 'images')
@@ -62,6 +66,7 @@ class Saver():
         self.save_interval = opts.save_interval
         self.train_images_path = opts.dataroot
         self.overwrite_save = opts.overwrite_save
+        self.amount_to_track = opts.amount_to_track
         # make directory
         if not os.path.exists(self.display_dir):
             os.makedirs(self.display_dir)
@@ -69,7 +74,13 @@ class Saver():
             os.makedirs(self.model_dir)
         if not os.path.exists(self.image_dir):
             os.makedirs(self.image_dir)
-
+        if not os.path.exists(self.save_path):
+            os.makedirs(self.save_path)
+        if self.amount_to_track > 0:
+            self.tracking_idx = np.random.choice(range(total_size), size=self.amount_to_track, replace=False)
+            self.tracking_path = os.path.join(self.save_path, 'tracking')
+            if not os.path.exists(self.tracking_path):
+                os.makedirs(self.tracking_path)
         # create tensorboard writer
         self.writer = SummaryWriter(log_dir=self.display_dir)
 
@@ -111,8 +122,26 @@ class Saver():
         img_from_pangea = img_from_pangea.convert('RGB')
         convert_tensor = transforms.ToTensor()
         return convert_tensor(img_from_pangea)
-    def run_infrence(self,ep,model,dataset):
-        #todo add save infernece for X pictures for every other batch to see progress save timestamp to see progress
+
+    def run_inference(self, ep, model, dataset):
+        self.run_inference_for_same_images( ep, model, dataset)
+        self.run_inference_for_all( ep, model, dataset)
+    def run_inference_for_same_images(self, ep, model, dataset):
+        if (ep + 1) % self.save_interval_track == 0 and self.amount_to_track>0:
+            for domain,all_domain_paths in enumerate(dataset):
+                for idx in self.tracking_idx:
+                    file_path = all_domain_paths[idx]
+                    img = self.load_tensor_image(file_path)
+                    img = img.to(device)
+                    new_dommain = 1 if domain == 0 else 0
+                    out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False,
+                                             new_domain=new_dommain,
+                                             stats=None, device=device)
+                    new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_d_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}_dom_{domain + 1}_ep_{ep}.png')
+                    save_imgs([out], [new_file_name], os.path.join(self.tracking_path, str(domain + 1)),True)
+
+
+    def run_inference_for_all(self, ep, model, dataset):
         if (ep + 1) % self.save_interval == 0:
             for domain,all_domain_paths in enumerate(dataset):
                 for file_path in all_domain_paths:
@@ -128,7 +157,22 @@ class Saver():
                         new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_dom_{domain + 1}.png')
                     else:
                         new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_dom_{domain + 1}_ep_{ep}.png')
-                    save_imgs([out], [new_file_name], os.path.join(self.save_path, str(domain+1)))
+                    save_imgs([out], [new_file_name], os.path.join(self.save_path, str(domain+1)),True)
+
+    def run_fid(self,ep):
+        if (ep + 1) % self.save_interval == 0 and self.check_fid:
+            for domain,folder in enumerate( os.listdir(self.train_images_path)):
+                real_images = os.path.join(self.train_images_path,folder)
+                if folder =='trainA':
+                    generated_images =  os.path.join(self.save_path, str(2))
+                else: # trainB
+                    generated_images = os.path.join(self.save_path, str(1))
+                fid_value = fid_score.calculate_fid_given_paths([real_images, generated_images], batch_size=1, device=0,
+                                                        dims=64, num_workers=0)
+
+                self.writer.add_scalar(f"fid_r_{folder}_f_{domain+1}", fid_value, ep)
+                print(f"fid folder {folder} to {generated_images} , score {fid_value}")
+
 
 
 
