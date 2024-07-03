@@ -17,3 +17,4 @@ if __name__ == '__main__':
     parser.add_argument('--generated_images', metavar='path', help='path to generated images', required=True)
     args=parser.parse_args()
     fid_evaluation(real_images=args.real_images, generated_images=args.generated_images)
+
