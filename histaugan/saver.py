@@ -175,11 +175,3 @@ class Saver():
                 self.writer.add_scalar(f"fid_r_{folder}_f_{domain+1}", fid_value, ep)
                 print(f"fid folder {folder} to {generated_images} , score {fid_value}")
 
-
-                    # Compute FID score
-                    fid_value = fid_score.calculate_fid_given_paths(file_path, os.path.join(self.save_path, str(domain+1)))
-                    print(f'FID: {fid_value}')
-
-
-
-
