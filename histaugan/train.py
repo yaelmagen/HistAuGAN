@@ -134,7 +134,7 @@ def main():
 
         # Save network weights
         saver.write_model(ep, total_it, model)
-        saver.run_inference_for_all(ep, model, dataset.images)
+        saver.run_inference(ep, model, dataset.images)
         saver.run_fid(ep)
     return
 
