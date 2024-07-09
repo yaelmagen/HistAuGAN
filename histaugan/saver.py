@@ -1,5 +1,8 @@
 import datetime
+import logging
 import os
+import random
+import sys
 
 import numpy as np
 import torchvision
@@ -9,12 +12,19 @@ from torch.utils.tensorboard import SummaryWriter
 
 import torch
 from torchvision import transforms
+
+import os
+sys.path.append(f'{os.getcwd()}')
 from augmentations import generate_hist_augs
 
 from pytorch_fid import fid_score
 
+logger = logging.getLogger('main_logger')
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
+mapping = {0:1,
+           1:0}
+folder_mapping = {'trainA':0,
+                  'trainB':1}
 # tensor to PIL Image
 def tensor2img(img,partial=False):
     if partial:
@@ -54,7 +64,7 @@ def save_concat_imgs(imgs, name, path):
 
 
 class Saver():
-    def __init__(self, opts,total_size=0):
+    def __init__(self, opts,val_dataset=0): # todo move val_dataset to set function
 
         self.check_fid = opts.check_fid
         self.save_interval_track = opts.save_interval_track
@@ -79,7 +89,8 @@ class Saver():
         if not os.path.exists(self.save_path):
             os.makedirs(self.save_path)
         if self.amount_to_track > 0:
-            self.tracking_idx = np.random.choice(range(total_size), size=self.amount_to_track, replace=False)
+            # self.tracking_idx = np.random.choice(range(total_size), size=self.amount_to_track, replace=False)
+            self.tracking_idx = random.sample(val_dataset.indices, self.amount_to_track)
             self.tracking_path = os.path.join(self.save_path, 'tracking')
             if not os.path.exists(self.tracking_path):
                 os.makedirs(self.tracking_path)
@@ -114,7 +125,7 @@ class Saver():
     # save model
     def write_model(self, ep, total_it, model):
         if (ep + 1) % self.model_save_freq == 0:
-            print('--- save the model @ ep %d ---' % (ep))
+            logger.info('--- save the model @ ep %d ---' % (ep))
             model.save('%s/%05d.pth' % (self.model_dir, ep), ep, total_it)
         elif ep == -1:
             model.save('%s/last.pth' % self.model_dir, ep, total_it)
@@ -125,53 +136,91 @@ class Saver():
         convert_tensor = transforms.ToTensor()
         return convert_tensor(img_from_pangea)
 
-    def run_inference(self, ep, model, dataset):
-        self.run_inference_for_same_images( ep, model, dataset)
-        self.run_inference_for_all( ep, model, dataset)
-    def run_inference_for_same_images(self, ep, model, dataset):
-        if (ep + 1) % self.save_interval_track == 0 and self.amount_to_track>0:
-            for domain,all_domain_paths in enumerate(dataset):
-                for idx in self.tracking_idx:
-                    file_path = all_domain_paths[idx]
-                    img = self.load_tensor_image(file_path)
-                    img = img.to(device)
-                    new_dommain = 1 if domain == 0 else 0
-                    out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False,
-                                             new_domain=new_dommain,
-                                             stats=None, device=device)
-                    new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_d_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}_dom_{domain + 1}_ep_{ep}.png')
-                    save_imgs([out], [new_file_name], os.path.join(self.tracking_path, str(domain + 1)),True)
+    def run_inference(self, ep, model, dataset,idx, train_val_flag):
+        self.run_inference_for_same_images( ep, model, dataset,train_val_flag)
+        self.run_inference_for_all( ep, model, dataset,idx,train_val_flag)
 
+    def run_inference_for_same_images(self, ep, model, dataset,train_val_flag):
+        if train_val_flag == 'val':
+            if (ep + 1) % self.save_interval_track == 0 and self.amount_to_track>0:
+                logger.info(f'--- run_inference_for_same_images ep {ep}--- ' )
+                for domain,all_domain_paths in enumerate(dataset):
+                    for idx in self.tracking_idx:
+                        try:
+                            file_path = all_domain_paths[idx]
+                            img = self.load_tensor_image(file_path)
+                            img = img.to(device)
 
-    def run_inference_for_all(self, ep, model, dataset):
+                            out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False,
+                                                     new_domain=mapping[domain],
+                                                     stats=None, device=device)
+                            new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_d_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}_dom_{domain}_ep_{ep}')
+                            save_imgs([out], [new_file_name], os.path.join(self.tracking_path, str(domain )),True)
+
+                        except Exception as ex:
+                            logger.error(f'error running inference (tracking) for file {file_path} error {ex}')
+
+    def run_inference_for_all(self, ep, model, dataset,idx,train_val_flag):
+
         if (ep + 1) % self.save_interval == 0:
+            logger.info(f'--- running inference for all images ep {ep},{train_val_flag}---')
+            new_save_path = os.path.join(self.save_path, train_val_flag)
+            if not os.path.exists(new_save_path):
+                os.mkdir(new_save_path)
+
+            start = datetime.datetime.now()
+            counter =0
             for domain,all_domain_paths in enumerate(dataset):
+                if counter > 30000:
+                    break
+                all_domain_paths = []
+                for i in idx.indices:
+                    try:
+                        if i< len(dataset[domain]):
+                            all_domain_paths.append(dataset[domain][i])
+                    except Exception as ex:
+                        logger.warning(f'error running inference (all)  error {ex} for id {i}')
+                lap = start
+
                 for file_path in all_domain_paths:
+                    try:
+                        #run infrence
+                        img = self.load_tensor_image(file_path)
+                        img = img.to(device)
+                        new_domain = mapping[domain]
+                        out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False, new_domain=new_domain,
+                                                 stats=None, device=device)
+                        # save
+                        if self.overwrite_save:
+                            new_file_name = str(file_path.split('/')[-1]).replace(".png", f'from_dom_{domain}_to_dom_{new_domain}')
+                        else:
+                            new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_from_dom_{domain}_to_dom_{new_domain}_ep_{ep}')
+                        save_imgs([out], [new_file_name], os.path.join(new_save_path, str(domain)),True)
 
-                    #run infrence
-                    img = self.load_tensor_image(file_path)
-                    img = img.to(device)
-                    new_domain = 1 if domain == 0 else 0
-                    out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False, new_domain=new_domain,
-                                             stats=None, device=device)
-                    # save
-                    if self.overwrite_save:
-                        new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_dom_{domain + 1}.png')
-                    else:
-                        new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_dom_{domain + 1}_ep_{ep}.png')
-                    save_imgs([out], [new_file_name], os.path.join(self.save_path, str(domain+1)),True)
+                        counter += 1
+                        if counter % 5000==0:
+                            elapsed_time = datetime.datetime.now() - lap
+                            logger.info(f'saved 5000 images in {(elapsed_time.total_seconds())} seconds ---')
+                            lap = datetime.datetime.now()
+                    except Exception as ex:
+                        logger.error(f'error running inference (all) for file {file_path} error {ex}')
+            elapsed_time = datetime.datetime.now() - start
+            logger.info(f'saved total of {counter} images in {(elapsed_time.total_seconds())} seconds ---')
 
-    def run_fid(self,ep):
+    def run_fid(self,ep,train_val_flag):
         if (ep + 1) % self.save_interval == 0 and self.check_fid:
+            logger.info(f'--- running fid ep {ep} , {train_val_flag}---')
             for domain,folder in enumerate( os.listdir(self.train_images_path)):
-                real_images = os.path.join(self.train_images_path,folder)
-                if folder =='trainA':
-                    generated_images =  os.path.join(self.save_path, str(2))
-                else: # trainB
-                    generated_images = os.path.join(self.save_path, str(1))
-                fid_value = fid_score.calculate_fid_given_paths([real_images, generated_images], batch_size=1, device=0,
-                                                        dims=64, num_workers=0)
+                try:
+                    real_images = os.path.join(self.train_images_path,folder)
+                    if folder in folder_mapping:
+                        generated_images =  os.path.join(os.path.join(self.save_path,train_val_flag), str(domain))
+                    fid_value = fid_score.calculate_fid_given_paths([real_images, generated_images], batch_size=50, device=device,
+                                                            dims=2048)
 
-                self.writer.add_scalar(f"fid_r_{folder}_f_{domain+1}", fid_value, ep)
-                print(f"fid folder {folder} to {generated_images} , score {fid_value}")
+                    self.writer.add_scalar(f"fid_r_{folder}_d_{mapping[domain]}_{train_val_flag}", fid_value, ep)
+                    logger.info(f"fid folder {folder} to {generated_images} , score {fid_value}")
+                    logger.info(f"---"*20)
 
+                except Exception as ex:
+                    logger.error(f'error running fid for folders  {real_images} and {generated_images} error {ex}')

@@ -1,5 +1,5 @@
 # code adpated from https://github.com/HsinYingLee/MDMM
-
+import logging
 import os
 import sys
 import torch.utils.data as data
@@ -16,7 +16,7 @@ class dataset_multi(data.Dataset):
         self.num_domains = opts.num_domains
         self.input_dim = opts.input_dim
         domains = [chr(i) for i in range(ord('A'), ord('Z') + 1)]
-        print(domains)
+        logging.info(domains)
         self.images = [None] * self.num_domains
         stats = ''
         for i in range(self.num_domains):

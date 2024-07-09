@@ -1,5 +1,7 @@
 
 import random
+
+import numpy as np
 import torch
 from torchvision import transforms
 
@@ -113,8 +115,8 @@ class Args:
     num_domains = 2
     nz = 8
     # resume = False
-    # resume = 'gan_weights.pth'
-    resume = 'first1.pth'
+    resume = '/data/weights/gan_weights.pth'
+    # resume = '/home/ubuntu/HistAuGANYael/first1.pth'
 
 
 opts = Args()

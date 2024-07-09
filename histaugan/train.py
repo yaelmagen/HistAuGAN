@@ -1,6 +1,7 @@
 # for local training
 # add a folder 'data' with folders of domains trainA trainB trainC ....
 # add these parameters to the run --dataroot C:\ydata\pangea\HistAuGAN\data  --name train.log --num_domains 2 --batch_size 2 --nThreads 1 --n_ep 10
+import logging
 import time
 
 import torch
@@ -13,11 +14,12 @@ from torch.utils.data import DataLoader, random_split
 
 
 def main():
+    logger = setup_logger()
     start = time.time()
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     # torch.autograd.set_detect_anomaly(True)
-
+    change_domain_num = True
     # parse options
     parser = TrainOptions()
     opts = parser.parse()
@@ -37,7 +39,7 @@ def main():
     #                 shutil.copyfile(img_path, target_path)
     #         print(f'--- copied all image to {tmp_dir} in {int(time.time() - start)}s ------------')
     #     opts.dataroot = str(tmp_dir)
-    print('\n--- load dataset ---')
+    logger.info('\n--- load dataset ---')
     # dataset = dataset_multi_from_txt(opts)
     dataset = dataset_multi(opts)
     total_size = len(dataset)
@@ -46,11 +48,11 @@ def main():
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     train_loader = DataLoader(train_dataset, batch_size=opts.batch_size, shuffle=True, num_workers=opts.nThreads)
     val_loader = DataLoader(val_dataset, batch_size=opts.batch_size, shuffle=False, num_workers=opts.nThreads)
-
-    print(f'------ took {int(time.time() - start)}s until here')
+    dataset_mapping = {'train':train_dataset, 'val':val_dataset}
+    logger.info(f'------ took {int(time.time() - start)}s until here')
 
     # model
-    print('\n--- load model ---')
+    logger.info('\n--- load model ---')
     model = MD_multi(opts)
     model.setgpu(opts.gpu)
     if opts.resume is None:
@@ -58,20 +60,21 @@ def main():
         ep0 = -1
         total_it = 0
     else:
-        ep0, total_it = model.resume(opts.resume)
+        ep0, total_it = model.resume(opts.resume,True,change_domain_num)
     model.set_scheduler(opts, last_ep=ep0)
     ep0 += 1
-    print('start the training at epoch %d' % (ep0))
+    logger.info('start the training at epoch %d' % (ep0))
 
     # saver for display and output
-    saver = Saver(opts,total_size)
+    saver = Saver(opts,val_dataset)
 
-    print(f'------ took {int(time.time() - start)}s until here')
+    logger.info(f'------ took {int(time.time() - start)}s until here')
 
     # train
-    print('\n--- train ---')
+    logger.info('\n--- train ---')
     max_it = 500000
     for ep in range(ep0, opts.n_ep):
+        logger.info(f'start train ep {ep}')
         model.train()  # Set the model to training mode
         for it, (images, c_org) in enumerate(train_loader):
             if images.size(0) != opts.batch_size:
@@ -95,17 +98,18 @@ def main():
             if not opts.no_display_img:
                 saver.write_display(ep, model)
 
-            print('total_it: %d (ep %d, it %d), lr %08f' %
+            logger.info('total_it: %d (ep %d, it %d), lr %08f' %
                   (total_it, ep, it, model.gen_opt.param_groups[0]['lr']))
             total_it += 1
-            if total_it >= max_it:
-                saver.write_img(-1, model)
-                saver.write_model(-1, total_it, model)
-                break
-
+            # if total_it >= max_it:
+            #     saver.write_img(-1, model)
+            #     saver.write_model(-1, total_it, model)
+            #     break
+        logger.info(f'finish train ep {ep}')
         # Validation loop
         model.eval()  # Set the model to evaluation mode
         with torch.no_grad():  # Disable gradient computation
+            logger.info(f'start validation  ep {ep}')
             for it, (images, c_org) in enumerate(val_loader):
                 if images.size(0) != opts.batch_size:
                     continue
@@ -124,7 +128,7 @@ def main():
                 # save to display file
                 if not opts.no_display_img:
                     saver.write_display(ep, model, mode='val')
-
+        logger.info(f'finish validation  ep {ep}')
         # decay learning rate
         if opts.n_ep_decay > -1:
             model.update_lr()
@@ -134,11 +138,29 @@ def main():
 
         # Save network weights
         saver.write_model(ep, total_it, model)
-        saver.run_inference(ep, model, dataset.images)
-        saver.run_fid(ep)
+        for train_val_flag in dataset_mapping.keys():
+            saver.run_inference(ep, model, dataset.images,dataset_mapping[train_val_flag],train_val_flag)
+            saver.run_fid(ep,train_val_flag)
+
     return
 
 
+def setup_logger(log_file='output.log'):
+    # Create a logger
+    logger = logging.getLogger('main_logger')
+
+    # Only add handlers if they haven't been added before
+    if not logger.handlers:
+        logger.setLevel(logging.INFO)
+        c_handler = logging.StreamHandler()
+        f_handler = logging.FileHandler(log_file)
+        log_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        c_handler.setFormatter(log_format)
+        f_handler.setFormatter(log_format)
+        logger.addHandler(c_handler)
+        logger.addHandler(f_handler)
+        logger.propagate = False
+    return logger
 if __name__ == '__main__':
-    print('hi')
+    torch.cuda.empty_cache()
     main()

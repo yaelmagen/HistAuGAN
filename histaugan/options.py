@@ -1,8 +1,9 @@
 # code adpated from https://github.com/HsinYingLee/MDMM
 
 import argparse
+import logging
 
-
+logger = logging.getLogger('main_logger')
 class TrainOptions():
     def __init__(self):
         self.parser = argparse.ArgumentParser()
@@ -22,7 +23,7 @@ class TrainOptions():
         self.parser.add_argument(
             '--input_dim', type=int, default=3, help='# of input channels for domain A')
         self.parser.add_argument(
-            '--nThreads', type=int, default=8, help='# of threads for data loader')
+            '--nThreads', type=int, default=4, help='# of threads for data loader')
         self.parser.add_argument(
             '--no_flip', action='store_true', help='specified if no flipping')
 
@@ -31,14 +32,14 @@ class TrainOptions():
             '--name', type=str, default='trial', help='folder name to save outputs')
         self.parser.add_argument(
             '--display_dir', type=str, default='./logs', help='path for saving display results')
-        self.parser.add_argument('--result_dir', type=str, default='./results',
+        self.parser.add_argument('--result_dir', type=str, default='/data/weights_results',
                                  help='path for saving result images and models')
         self.parser.add_argument(
             '--display_freq', type=int, default=10, help='freq (iteration) of display')
         self.parser.add_argument(
             '--img_save_freq', type=int, default=50, help='freq (epoch) of saving images')
         self.parser.add_argument(
-            '--model_save_freq', type=int, default=500, help='freq (epoch) of saving models')
+            '--model_save_freq', type=int, default=10, help='freq (epoch) of saving models')
         self.parser.add_argument(
             '--no_display_img', action='store_true', help='specified if no dispaly')
 
@@ -65,20 +66,20 @@ class TrainOptions():
         self.parser.add_argument('--lambda_cls', type=float, default=1.0)
         self.parser.add_argument('--lambda_cls_G', type=float, default=5.0)
         self.parser.add_argument('--gpu', type=int, default=0, help='gpu')
-        self.parser.add_argument('--val_split', type=int, default=0.2, help='validation size in val of 0-1')
+        self.parser.add_argument('--val_split', type=int, default=0.3, help='validation size in val of 0-1')
         self.parser.add_argument('--save_path', type=str, default='/data/results_new', help='save path of results')
-        self.parser.add_argument('--save_interval', type=int, default=5, help='interval of saving all data')
+        self.parser.add_argument('--save_interval', type=int, default=50, help='interval of saving all data')
         self.parser.add_argument('--save_interval_track', type=int, default=1, help='interval of saving track data')
-        self.parser.add_argument('--amount_to_track', type=int, default=3, help='amount of images to track if 0 no tracking will happen')
+        self.parser.add_argument('--amount_to_track', type=int, default=5, help='amount of images to track if 0 no tracking will happen')
         self.parser.add_argument('--overwrite_save', type=bool, default=True, help='overwrite saved data')
         self.parser.add_argument('--check_fid', type=bool, default=True, help='should check check fid ')
 
     def parse(self):
         self.opt = self.parser.parse_args()
         args = vars(self.opt)
-        print('\n--- load options ---')
+        logger.info('\n--- load options ---')
         for name, value in sorted(args.items()):
-            print('%s: %s' % (str(name), str(value)))
+            logger.info('%s: %s' % (str(name), str(value)))
         return self.opt
 
 
@@ -122,9 +123,9 @@ class TestOptions():
     def parse(self):
         self.opt = self.parser.parse_args()
         args = vars(self.opt)
-        print('\n--- load options ---')
+        logger.info('\n--- load options ---')
         for name, value in sorted(args.items()):
-            print('%s: %s' % (str(name), str(value)))
+            logger.ingo('%s: %s' % (str(name), str(value)))
         # set irrelevant options
         self.opt.dis_scale = 3
         self.opt.dis_norm = 'None'

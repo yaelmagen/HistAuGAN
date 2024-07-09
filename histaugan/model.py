@@ -1,12 +1,17 @@
 # code adpated from https://github.com/HsinYingLee/MDMM
+import logging
+import sys
 
 import torch
 import torch.nn as nn
 import numpy as np
+from torchsummary import summary
+import os
+# sys.path.append(f'{os.getcwd()}/histaugan')
+# import histaugan.networks as networks  # use this line when evaluating the trained model
+import networks
 
-import histaugan.networks as networks  # use this line when evaluating the trained model
-# import networks
-
+logger = logging.getLogger('main_logger')
 device = torch.device(
     'cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -66,9 +71,9 @@ class MD_multi(nn.Module):
     def set_scheduler(self, opts, last_ep=0):
         self.dis1_sch = networks.get_scheduler(self.dis1_opt, opts, last_ep)
         self.dis2_sch = networks.get_scheduler(self.dis2_opt, opts, last_ep)
-        print(self.dis2_opt)
+        logger.info(self.dis2_opt)
         self.disContent_opt.param_groups[0]['initial_lr'] = 0.00004
-        print(self.disContent_opt)
+        logger.info(self.disContent_opt)
         self.disContent_sch = networks.get_scheduler(
             self.disContent_opt, opts, last_ep)
         self.enc_c_sch = networks.get_scheduler(self.enc_c_opt, opts, last_ep)
