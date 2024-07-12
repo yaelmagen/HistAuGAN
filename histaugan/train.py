@@ -60,7 +60,7 @@ def main():
         ep0 = -1
         total_it = 0
     else:
-        ep0, total_it = model.resume(opts.resume,True,change_domain_num)
+        ep0, total_it = model.resume(opts.resume,True)
     model.set_scheduler(opts, last_ep=ep0)
     ep0 += 1
     logger.info('start the training at epoch %d' % (ep0))

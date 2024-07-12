@@ -150,7 +150,7 @@ class Saver():
                             file_path = all_domain_paths[idx]
                             img = self.load_tensor_image(file_path)
                             img = img.to(device)
-
+                            save_imgs([img], [file_path], os.path.join(self.tracking_path, str(domain)), True)
                             out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False,
                                                      new_domain=mapping[domain],
                                                      stats=None, device=device)
@@ -160,7 +160,7 @@ class Saver():
                         except Exception as ex:
                             logger.error(f'error running inference (tracking) for file {file_path} error {ex}')
 
-    def run_inference_for_all(self, ep, model, dataset,idx,train_val_flag):
+    def run_inference_for_all(self, ep, model, dataset, idx, train_val_flag):
 
         if (ep + 1) % self.save_interval == 0:
             logger.info(f'--- running inference for all images ep {ep},{train_val_flag}---')
@@ -169,14 +169,16 @@ class Saver():
                 os.mkdir(new_save_path)
 
             start = datetime.datetime.now()
-            counter =0
-            for domain,all_domain_paths in enumerate(dataset):
+            counter = 0
+            batch_size = len(idx.indices)  # Define your batch size here
+            batch_paths = []
+            for domain, all_domain_paths in enumerate(dataset):
                 if counter > 30000:
                     break
                 all_domain_paths = []
                 for i in idx.indices:
                     try:
-                        if i< len(dataset[domain]):
+                        if i < len(dataset[domain]):
                             all_domain_paths.append(dataset[domain][i])
                     except Exception as ex:
                         logger.warning(f'error running inference (all)  error {ex} for id {i}')
@@ -184,21 +186,37 @@ class Saver():
 
                 for file_path in all_domain_paths:
                     try:
-                        #run infrence
-                        img = self.load_tensor_image(file_path)
-                        img = img.to(device)
-                        new_domain = mapping[domain]
-                        out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False, new_domain=new_domain,
-                                                 stats=None, device=device)
-                        # save
-                        if self.overwrite_save:
-                            new_file_name = str(file_path.split('/')[-1]).replace(".png", f'from_dom_{domain}_to_dom_{new_domain}')
+                        batch_paths.append(file_path)
+                        if len(batch_paths) == batch_size:
+                            # run infrence
+                            # Load batch of images
+                            imgs = torch.stack([self.load_tensor_image(p) for p in batch_paths])
+                            imgs = imgs.to(device)
+                            # img = self.load_tensor_image(file_path)
+                            # img = img.to(device)
+                            if domain>1:
+                                break
+                            new_domain = mapping[domain]
+                            outs = generate_hist_augs(imgs, domain, model, z_content=None, same_attribute=False,
+                                                      new_domain=new_domain,
+                                                      stats=None, device=device)
                         else:
-                            new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_from_dom_{domain}_to_dom_{new_domain}_ep_{ep}')
-                        save_imgs([out], [new_file_name], os.path.join(new_save_path, str(domain)),True)
+                            continue
+                        new_file_names = []
+                        # save
+                        for _, file_path in zip(outs, batch_paths):
+                            if self.overwrite_save:
+                                new_file_name = str(file_path.split('/')[-1]).replace(".png",
+                                                                                      f'from_dom_{domain}_to_dom_{new_domain}')
+                            else:
+                                new_file_name = str(file_path.split('/')[-1]).replace(".png",
+                                                                                      f'_from_dom_{domain}_to_dom_{new_domain}_ep_{ep}')
+                            new_file_names.append(new_file_name)
+                        save_imgs(outs, new_file_names, os.path.join(new_save_path, str(domain)), True)
 
-                        counter += 1
-                        if counter % 5000==0:
+                        counter += len(batch_paths)
+                        batch_paths = []
+                        if counter % 5000 == 0:
                             elapsed_time = datetime.datetime.now() - lap
                             logger.info(f'saved 5000 images in {(elapsed_time.total_seconds())} seconds ---')
                             lap = datetime.datetime.now()
