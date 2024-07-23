@@ -44,7 +44,9 @@ class dataset_multi(data.Dataset):
         return
 
     def __getitem__(self, index):
-        cls = random.randint(0, self.num_domains-1)
+
+        NUM_DOMANIES_HARDCODED = 2
+        cls = random.randint(0, NUM_DOMANIES_HARDCODED-1)
         c_org = np.zeros((self.num_domains,))
         data = self.load_img(self.images[cls][random.randint(
             0, len(self.images[cls]) - 1)], self.input_dim)

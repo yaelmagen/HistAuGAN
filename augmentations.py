@@ -147,8 +147,7 @@ std_domains = [
                  0.4496, 0.6488, 0.4886, 0.2989]),
 ]
 
-
-def generate_hist_augs(img, img_domain, model, z_content=None, same_attribute=False, new_domain=None, stats=None, device=torch.device('cpu')):
+def generate_hist_augs(imgs, img_domains, model, z_content=None, same_attribute=False, new_domain=None, stats=None, device=torch.device('cpu')):
     """
     Generates a new stain color for the input image img.
 
@@ -161,22 +160,32 @@ def generate_hist_augs(img, img_domain, model, z_content=None, same_attribute=Fa
     :stats: (mean, std dev) of the latent space of HistAuGAN
     :device: torch.device to map the tensors to
     """
-    # compute content vector
+    N = imgs.size(0)  # batch size
+
     if z_content is None:
-        z_content = model.enc_c(img.sub(0.5).mul(2).unsqueeze(0))
+        z_content = model.enc_c(imgs.sub(0.5).mul(2))
 
     # compute attribute
     if same_attribute:
-        mu, logvar = model.enc_a.forward(img.sub(0.5).mul(
-            2).unsqueeze(0), torch.eye(Args.num_domains)[img_domain].unsqueeze(0).to(device))
+        mu, logvar = model.enc_a.forward(imgs.sub(0.5).mul(2), torch.eye(Args.num_domains)[img_domains].to(device))
         std = logvar.mul(0.5).exp_().to(device)
-        eps = torch.randn((std.size(0), std.size(1))).to(device)
+        eps = torch.randn((N, std.size(1))).to(device)
         z_attr = eps.mul(std).add_(mu)
-    elif same_attribute == False and stats is not None and new_domain in range(Args.num_domains):
-        z_attr = (torch.randn((1, 8, )) * \
-            stats[1][new_domain] + stats[0][new_domain]).to(device)
+    elif not same_attribute and stats is not None and all(d in range(Args.num_domains) for d in new_domain):
+        z_attr = torch.stack([
+            torch.randn((1, 8)) * stats[1][d] + stats[0][d]
+            for d in new_domain
+        ]).squeeze(1).to(device)
     else:
-        z_attr = torch.randn((1, 8, )).to(device)
+        z_attr = torch.randn((N, 8)).to(device)
+
+    # if isinstance(new_domain, torch.Tensor) and new_domain.shape == (N,):
+    #     new_domain_vectors = torch.eye(Args.num_domains)[new_domain].to(device)
+    # elif isinstance(new_domain, list) and len(new_domain) == N:
+    #     new_domain_vectors = torch.eye(Args.num_domains)[new_domain].to(device)
+    # else:
+    #     raise ValueError("new_domains must be a tensor or list of length N")
+    #
 
     # determine new domain vector
     if isinstance(new_domain, int) and new_domain in range(Args.num_domains):
@@ -185,10 +194,9 @@ def generate_hist_augs(img, img_domain, model, z_content=None, same_attribute=Fa
     elif isinstance(new_domain, torch.Tensor) and new_domain.shape == (1, Args.num_domains):
         new_domain = new_domain.to(device)
     else:
-        # new_domain = torch.eye(5)[np.random.randint(5)].unsqueeze(0).to(device)
-        new_domain = torch.eye(Args.num_domains)[np.random.randint(Args.num_domains)].unsqueeze(0).to(device)
+        raise ValueError("new_domains must be a tensor or list of length N")
+    new_domain =new_domain.repeat(N,1)
+    # generate new histology images with same content as imgs
+    out = model.gen(z_content, z_attr, new_domain).detach()  # shape: (N, c, h, w)
 
-    # generate new histology image with same content as img
-    out = model.gen(z_content, z_attr, new_domain).detach().squeeze(0)  # in range [-1, 1]
-
-    return out
+    return out.cpu()

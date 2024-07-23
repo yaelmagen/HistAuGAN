@@ -8,7 +8,7 @@ def fid_evaluation(real_images, generated_images):
     # --generated_images C:/Users/Admin/PycharmProjects/Pangea/HistAuGAN/histaugan/results/generated_images
 
     # FID score between the two sets of images as numpy arrays: real_images and generated_images
-    fid_value = fid_score.calculate_fid_given_paths([real_images, generated_images], batch_size=1, device=0, dims=64, num_workers=0)
+    fid_value = fid_score.calculate_fid_given_paths([real_images, generated_images], batch_size=64, device=de, dims=64, num_workers=0)
     print("FID Score:", fid_value)
 
 if __name__ == '__main__':

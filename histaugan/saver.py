@@ -106,6 +106,7 @@ class Saver():
             for m in members:
                 # print(f'm: {m},getattr(model, m): {getattr(model, m)} iter: {total_it}')
                 self.writer.add_scalar(f"{m}_{mode}", getattr(model, m), total_it)
+                logging.info(f"printing loss: {m}_{mode} , val: {getattr(model, m)} , it: {total_it}")
             # write img
             image_dis = torchvision.utils.make_grid(model.image_display,
                                                     nrow=model.image_display.size(0) // 2) / 2 + 0.5
@@ -114,6 +115,8 @@ class Saver():
     # save result images
     def write_img(self, ep, model):
         if (ep + 1) % self.img_save_freq == 0:
+
+            logger.info('--- save the images for @ ep %d ---' % (ep))
             assembled_images = model.assemble_outputs()
             img_filename = '%s/gen_%05d.jpg' % (self.image_dir, ep)
             torchvision.utils.save_image(assembled_images / 2 + 0.5, img_filename, nrow=1)
@@ -145,17 +148,24 @@ class Saver():
             if (ep + 1) % self.save_interval_track == 0 and self.amount_to_track>0:
                 logger.info(f'--- run_inference_for_same_images ep {ep}--- ' )
                 for domain,all_domain_paths in enumerate(dataset):
+                    if domain > 1:
+                        break
                     for idx in self.tracking_idx:
                         try:
                             file_path = all_domain_paths[idx]
                             img = self.load_tensor_image(file_path)
                             img = img.to(device)
-                            save_imgs([img], [file_path], os.path.join(self.tracking_path, str(domain)), True)
+                            origin_path = str(file_path.split('/')[-1]).replace(".png",
+                                                                              f'_original')
+
+                            save_imgs([img], [origin_path], os.path.join(self.tracking_path, str(domain)), True)
+
+                            img = img.unsqueeze(0)
                             out = generate_hist_augs(img, domain, model, z_content=None, same_attribute=False,
                                                      new_domain=mapping[domain],
                                                      stats=None, device=device)
                             new_file_name = str(file_path.split('/')[-1]).replace(".png", f'_d_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}_dom_{domain}_ep_{ep}')
-                            save_imgs([out], [new_file_name], os.path.join(self.tracking_path, str(domain )),True)
+                            save_imgs([out[0]], [new_file_name], os.path.join(self.tracking_path, str(domain )),True)
 
                         except Exception as ex:
                             logger.error(f'error running inference (tracking) for file {file_path} error {ex}')
@@ -170,7 +180,7 @@ class Saver():
 
             start = datetime.datetime.now()
             counter = 0
-            batch_size = len(idx.indices)  # Define your batch size here
+            batch_size = 10
             batch_paths = []
             for domain, all_domain_paths in enumerate(dataset):
                 if counter > 30000:
@@ -230,15 +240,16 @@ class Saver():
             logger.info(f'--- running fid ep {ep} , {train_val_flag}---')
             for domain,folder in enumerate( os.listdir(self.train_images_path)):
                 try:
-                    real_images = os.path.join(self.train_images_path,folder)
-                    if folder in folder_mapping:
-                        generated_images =  os.path.join(os.path.join(self.save_path,train_val_flag), str(domain))
-                    fid_value = fid_score.calculate_fid_given_paths([real_images, generated_images], batch_size=50, device=device,
-                                                            dims=2048)
+                    if folder.__contains__('A') or folder.__contains__('B'):
+                        real_images = os.path.join(self.train_images_path,folder)
+                        if folder in folder_mapping:
+                            generated_images =  os.path.join(os.path.join(self.save_path,train_val_flag), str(domain))
+                        fid_value = fid_score.calculate_fid_given_paths([real_images, generated_images], batch_size=50, device=device,
+                                                                dims=2048)
 
-                    self.writer.add_scalar(f"fid_r_{folder}_d_{mapping[domain]}_{train_val_flag}", fid_value, ep)
-                    logger.info(f"fid folder {folder} to {generated_images} , score {fid_value}")
-                    logger.info(f"---"*20)
+                        self.writer.add_scalar(f"fid_r_{folder}_d_{mapping[domain]}_{train_val_flag}", fid_value, ep)
+                        logger.info(f"fid folder {folder} to {generated_images} , score {fid_value}")
+                        logger.info(f"---"*20)
 
                 except Exception as ex:
                     logger.error(f'error running fid for folders  {real_images} and {generated_images} error {ex}')

@@ -443,7 +443,6 @@ class MD_multi(nn.Module):
         }
         torch.save(state, filename)
         return
-
     def resume(self, model_dir, train=True):
         checkpoint = torch.load(model_dir, map_location=torch.device('cpu'))
         # weight

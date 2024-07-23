@@ -8,7 +8,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
 from data_utils import Center0Dataset, TestCenterDataset, MultipleCentersSeq, OneCenterLoad
-from augmentations import basic_augmentations, color_augmentations, no_augmentations, gan_augmentations, geom_augmentations, normalization, color_augmentations_light
+from augmentations import basic_augmentations, color_augmentations, no_augmentations, gan_augmentations, geom_augmentations, color_augmentations_light
 from model import Classifier
 
 
