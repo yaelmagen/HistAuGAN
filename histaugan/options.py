@@ -55,8 +55,8 @@ class TrainOptions():
         self.parser.add_argument(
             '--lr_policy', type=str, default='step', help='type of learn rate decay')  # MDMM used lambda
         self.parser.add_argument(
-            '--n_ep', type=int, default=20, help='number of epochs')  # 400 * d_iter
-        self.parser.add_argument('--n_ep_decay', type=int, default=10,
+            '--n_ep', type=int, default=100, help='number of epochs')  # 400 * d_iter
+        self.parser.add_argument('--n_ep_decay', type=int, default=30,
                                  help='epoch start decay learning rate, set -1 if no decay')  # 200 * d_iter
         self.parser.add_argument('--resume', type=str, default=None,
                                  help='specified the dir of saved models for resume the training')
@@ -67,7 +67,7 @@ class TrainOptions():
         self.parser.add_argument('--lambda_cls_G', type=float, default=5.0)
         self.parser.add_argument('--gpu', type=int, default=0, help='gpu')
         self.parser.add_argument('--val_split', type=int, default=0.3, help='validation size in val of 0-1')
-        self.parser.add_argument('--save_path', type=str, default='/data/results_pre_train', help='save path of results')
+        self.parser.add_argument('--save_path', type=str, default='/data/results_lr_30_d_iter_2', help='save path of results')
         self.parser.add_argument('--save_interval', type=int, default=3, help='interval of saving all data')
         self.parser.add_argument('--save_interval_track', type=int, default=1, help='interval of saving track data')
         self.parser.add_argument('--amount_to_track', type=int, default=5, help='amount of images to track if 0 no tracking will happen')
