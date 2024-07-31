@@ -106,7 +106,7 @@ class Saver():
             for m in members:
                 # print(f'm: {m},getattr(model, m): {getattr(model, m)} iter: {total_it}')
                 self.writer.add_scalar(f"{m}_{mode}", getattr(model, m), total_it)
-                logging.info(f"printing loss: {m}_{mode} , val: {getattr(model, m)} , it: {total_it}")
+                logger.info(f"printing loss: {m}_{mode} , val: {getattr(model, m)} , it: {total_it}")
             # write img
             image_dis = torchvision.utils.make_grid(model.image_display,
                                                     nrow=model.image_display.size(0) // 2) / 2 + 0.5
@@ -222,7 +222,8 @@ class Saver():
                                 new_file_name = str(file_path.split('/')[-1]).replace(".png",
                                                                                       f'_from_dom_{domain}_to_dom_{new_domain}_ep_{ep}')
                             new_file_names.append(new_file_name)
-                        save_imgs(outs, new_file_names, os.path.join(new_save_path, str(domain)), True)
+                        new_file_path = os.path.join( new_save_path, str(domain))
+                        save_imgs(outs, new_file_names, new_file_path, True)
 
                         counter += len(batch_paths)
                         batch_paths = []
@@ -232,6 +233,7 @@ class Saver():
                             lap = datetime.datetime.now()
                     except Exception as ex:
                         logger.error(f'error running inference (all) for file {file_path} error {ex}')
+                counter = 0
             elapsed_time = datetime.datetime.now() - start
             logger.info(f'saved total of {counter} images in {(elapsed_time.total_seconds())} seconds ---')
 
@@ -243,7 +245,7 @@ class Saver():
                     if folder.__contains__('A') or folder.__contains__('B'):
                         real_images = os.path.join(self.train_images_path,folder)
                         if folder in folder_mapping:
-                            generated_images =  os.path.join(os.path.join(self.save_path,train_val_flag), str(domain))
+                            generated_images =  os.path.join(os.path.join(self.save_path,train_val_flag), str(mapping[domain]))
                         fid_value = fid_score.calculate_fid_given_paths([real_images, generated_images], batch_size=50, device=device,
                                                                 dims=2048)
 
