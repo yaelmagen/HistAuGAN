@@ -1,353 +1,467 @@
+# code adpated from https://github.com/HsinYingLee/MDMM
+import logging
+import sys
 
-import matplotlib.pyplot as plt
-import pytorch_lightning as pl
-import pytorch_lightning.metrics.functional as metrics
 import torch
-import torchvision.models as models
+import torch.nn as nn
+import numpy as np
+from torchsummary import summary
+import os
+# sys.path.append(f'{os.getcwd()}/histaugan')
+# import histaugan.networks as networks  # use this line when evaluating the trained model
+import networks
 
-from argparse import ArgumentParser
-from torch.nn import functional as F
-from torchvision import transforms
-
-from augmentations import basic_augmentations, color_augmentations, no_augmentations, gan_augmentations, mean_domains, std_domains
-from utils import plot_confusion_matrix
-from histaugan.model import MD_multi
-
-
-class Args:
-    concat = 1
-    crop_size = 216  # only used as an argument for training
-    dis_norm = None
-    dis_scale = 3
-    dis_spectral_norm = False
-    dataroot = 'data'
-    gpu = 1
-    input_dim = 3
-    nThreads = 4
-    num_domains = 2
-    nz = 8
-    resume = '/home/haicu/sophia.wagner/projects/stain_color/stain_aug/gan_weights.pth'
+logger = logging.getLogger('main_logger')
+device = torch.device(
+    'cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 
-class Classifier(pl.LightningModule):
-    def __init__(self, learning_rate=1e-3, l2_reg=1e-6, weighted=False, dropout=0.0, gan_aug=False, transform=no_augmentations):
+class MD_multi(nn.Module):
+    def __init__(self, opts):
         super().__init__()
-        self.save_hyperparameters()
-        self.gan_aug = gan_aug
+        self.opts = opts
+        lr = 0.0001
+        lr_dcontent = lr/2.5
+        self.nz = 8
 
-        self.model = models.resnet18(pretrained=True)
-        # freeze the first resnet blocks
-        for param in self.model.parameters():
-            param.requires_grad = False
+        if opts.concat == 1:
+            self.concat = True
+        else:
+            self.concat = False
 
-        for param in self.model.layer3.parameters():
-            param.requires_grad = True
-        for param in self.model.layer4.parameters():
-            param.requires_grad = True
-        self.model.fc = torch.nn.Sequential(
-            torch.nn.Dropout(p=dropout),
-            torch.nn.Linear(512, 1),
-        )
+        self.dis1 = networks.MD_Dis(opts.input_dim, norm=opts.dis_norm,
+                                    sn=opts.dis_spectral_norm, c_dim=opts.num_domains, image_size=opts.crop_size)
+        self.dis2 = networks.MD_Dis(opts.input_dim, norm=opts.dis_norm,
+                                    sn=opts.dis_spectral_norm, c_dim=opts.num_domains, image_size=opts.crop_size)
+        self.enc_c = networks.MD_E_content(opts.input_dim)
+        if self.concat:
+            self.enc_a = networks.MD_E_attr_concat(opts.input_dim, output_nc=self.nz, c_dim=opts.num_domains,
+                                                   norm_layer=None, nl_layer=networks.get_non_linearity(layer_type='lrelu'))
+            self.gen = networks.MD_G_multi_concat(
+                opts.input_dim, c_dim=opts.num_domains, nz=self.nz)
+        else:
+            self.enc_a = networks.MD_E_attr(
+                opts.input_dim, output_nc=self.nz, c_dim=opts.num_domains)
+            self.gen = networks.MD_G_multi(
+                opts.input_dim, nz=self.nz, c_dim=opts.num_domains)
 
-        self.weight = torch.ones(1)
-        if weighted:
-            self.weight *= 12.5
+        self.dis1_opt = torch.optim.Adam(
+            self.dis1.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=0.0001)
+        self.dis2_opt = torch.optim.Adam(
+            self.dis2.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=0.0001)
+        self.enc_c_opt = torch.optim.Adam(
+            self.enc_c.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=0.0001)
+        self.enc_a_opt = torch.optim.Adam(
+            self.enc_a.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=0.0001)
+        self.gen_opt = torch.optim.Adam(
+            self.gen.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=0.0001)
+        self.disContent = networks.MD_Dis_content(c_dim=opts.num_domains)
+        self.disContent_opt = torch.optim.Adam(self.disContent.parameters(
+        ), lr=lr/2.5, betas=(0.5, 0.999), weight_decay=0.0001)
+        self.cls_loss = nn.BCEWithLogitsLoss()
 
-        self.hp_metric = -1
-        self.count = 0
+    def initialize(self):
+        self.dis1.apply(networks.gaussian_weights_init)
+        self.dis2.apply(networks.gaussian_weights_init)
+        self.disContent.apply(networks.gaussian_weights_init)
+        self.gen.apply(networks.gaussian_weights_init)
+        self.enc_c.apply(networks.gaussian_weights_init)
+        self.enc_a.apply(networks.gaussian_weights_init)
 
-        # initialize GAN for augmentations
-        if self.gan_aug:
-            opts = Args()
-            aug_model = MD_multi(opts)
-            aug_model.resume(opts.resume, train=False)
-            aug_model.eval()
-            self.enc = aug_model.enc_c
-            self.gen = aug_model.gen
+    def set_scheduler(self, opts, last_ep=0):
+        self.dis1_sch = networks.get_scheduler(self.dis1_opt, opts, last_ep)
+        self.dis2_sch = networks.get_scheduler(self.dis2_opt, opts, last_ep)
+        logger.info(self.dis2_opt)
+        self.disContent_opt.param_groups[0]['initial_lr'] = 0.00004
+        logger.info(self.disContent_opt)
+        self.disContent_sch = networks.get_scheduler(
+            self.disContent_opt, opts, last_ep)
+        self.enc_c_sch = networks.get_scheduler(self.enc_c_opt, opts, last_ep)
+        self.enc_a_sch = networks.get_scheduler(self.enc_a_opt, opts, last_ep)
+        self.gen_sch = networks.get_scheduler(self.gen_opt, opts, last_ep)
 
-            self.shift = transforms.Normalize(
-                mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-            self.transforms_after = transform
+    def update_lr(self):
+        self.dis1_sch.step()
+        self.dis2_sch.step()
+        self.disContent_sch.step()
+        self.enc_c_sch.step()
+        self.enc_a_sch.step()
+        self.gen_sch.step()
 
-            self.mean_domains = mean_domains
-            self.std_domains = std_domains
+    def setgpu(self, gpu):
+        self.gpu = gpu
+        self.dis1.cuda(self.gpu)
+        self.dis2.cuda(self.gpu)
+        self.enc_c.cuda(self.gpu)
+        self.enc_a.cuda(self.gpu)
+        self.gen.cuda(self.gpu)
+        self.disContent.cuda(self.gpu)
 
-            print('histaugan initialized')
+    def get_z_random(self, batchSize, nz, random_type='gauss'):
+        z = torch.randn(batchSize, nz)
+        return z
 
-    def forward(self, x):
-        out = self.model(x)
-        return out
+    def test_forward_random(self, image):
+        self.z_content = self.enc_c.forward(image)
+        outputs = []
+        for i in range(self.opts.num_domains):
+            self.z_random = self.get_z_random(image.size(0), self.nz, 'gauss')
+            c_trg = np.zeros((image.size(0), self.opts.num_domains))
+            c_trg[:, i] = 1
+            c_trg = torch.FloatTensor(c_trg)
+            output = self.gen.forward(self.z_content, self.z_random, c_trg)
+            outputs.append(output)
+        return outputs
 
-    def training_step(self, batch, batch_idx):
-        x, y = batch
+    def test_forward_transfer(self, image, image_trg, c_trg):
+        self.z_content = self.enc_c.forward(image)
+        self.mu, self.logvar = self.enc_a.forward(self.image_trg, self.c_trg)
+        std = torch.exp(self.logvar.mul(0.5))
+        eps = self.get_z_random(std.size(0), std.size(1), 'gauss')
+        self.z_attr = torch.add(eps.mul(std), self.mu)
+        output = self.gen.forward(self.z_content, self.z_attr, c_trg)
+        return output
 
-        if self.gan_aug:
-            # ----------------------
-            # HistAuGAN augmentation
-            # ----------------------
-            bs, _, _, _ = x.shape
+    def forward(self):
+        # input images
+        if not self.input.size(0) % 2 == 0:
+            print("Need to be even QAQ")
+            input()
+        half_size = self.input.size(0)//2
+        self.real_A = self.input[0:half_size]
+        self.real_B = self.input[half_size:]
+        c_org_A = self.c_org[0:half_size]
+        c_org_B = self.c_org[half_size:]
 
-            # augmentations are applied with probability 0.5
-            indices = torch.randint(2, (bs, ))
-            num_aug = indices.sum()
+        # get encoded z_c
+        self.real_img = torch.cat((self.real_A, self.real_B), 0)
+        self.z_content = self.enc_c.forward(self.real_img)
+        self.z_content_a, self.z_content_b = torch.split(
+            self.z_content, half_size, dim=0)
 
-            if num_aug > 0:
-                # sample new domain
-                new_domains = torch.randint(5, (num_aug, )).to(self.device)
-                domain = torch.eye(5)[new_domains].to(self.device)
+        # get encoded z_a
+        if self.concat:
+            self.mu, self.logvar = self.enc_a.forward(
+                self.real_img, self.c_org)
+#             print('output of enc_a')
+#             print(self.mu)
+#             print(self.logvar)
+            # <-------- inf values are obtained in this operations
+            std = torch.exp(self.logvar.mul(0.5))
+            eps = self.get_z_random(
+                std.size(0), std.size(1), 'gauss').to(device)
+            self.z_attr = torch.add(eps.mul(std), self.mu)
+#             print('self.z_attr')
+#             print(self.z_attr)
+        else:
+            self.z_attr = self.enc_a.forward(self.real_img, self.c_org)
+        self.z_attr_a, self.z_attr_b = torch.split(
+            self.z_attr, half_size, dim=0)
+        # get random z_a
+        self.z_random = self.get_z_random(
+            half_size, self.nz, 'gauss').to(device)
 
-                # sample attribute vector
-                z_attr = (torch.randn(
-                    (num_aug, 8, )) * self.std_domains[new_domains] + self.mean_domains[new_domains]).to(self.device)
+        # first cross translation
+        input_content_forA = torch.cat(
+            (self.z_content_b, self.z_content_a, self.z_content_b), 0)
+        input_content_forB = torch.cat(
+            (self.z_content_a, self.z_content_b, self.z_content_a), 0)
+        input_attr_forA = torch.cat(
+            (self.z_attr_a, self.z_attr_a, self.z_random), 0)
+        input_attr_forB = torch.cat(
+            (self.z_attr_b, self.z_attr_b, self.z_random), 0)
+#         print('self.z_attr_a, self.z_attr_a, self.z_random')
+#         print(self.z_attr_a)
+#         print(self.z_attr_a)
+#         print(self.z_random)
+        input_c_forA = torch.cat((c_org_A, c_org_A, c_org_A), 0)
+        input_c_forB = torch.cat((c_org_B, c_org_B, c_org_B), 0)
+#         print('gen fakeA')
+        output_fakeA = self.gen.forward(
+            input_content_forA, input_attr_forA, input_c_forA)
+#         print('--nan values generated ---------------------')
+#         print('gen fakeB')
+        output_fakeB = self.gen.forward(
+            input_content_forB, input_attr_forB, input_c_forB)
+#         print('--nan values generated ---------------------')
+        self.fake_A_encoded, self.fake_AA_encoded, self.fake_A_random = torch.split(
+            output_fakeA, self.z_content_a.size(0), dim=0)
+        self.fake_B_encoded, self.fake_BB_encoded, self.fake_B_random = torch.split(
+            output_fakeB, self.z_content_a.size(0), dim=0)
 
-                # compute content encoding
-                z_content = self.enc(x[indices.bool()])
+        # get reconstructed encoded z_c
+        self.fake_encoded_img = torch.cat(
+            (self.fake_A_encoded, self.fake_B_encoded), 0)
+        self.z_content_recon = self.enc_c.forward(self.fake_encoded_img)
+        self.z_content_recon_b, self.z_content_recon_a = torch.split(
+            self.z_content_recon, half_size, dim=0)
 
-                # generate augmentations
-                # in range [-1, 1]
-                x_aug = self.gen(z_content, z_attr, domain).detach()
+        # get reconstructed encoded z_a
+        if self.concat:
+            self.mu_recon, self.logvar_recon = self.enc_a.forward(
+                self.fake_encoded_img, self.c_org)
+            std_recon = torch.exp(self.logvar_recon.mul(0.5))
+            eps_recon = self.get_z_random(std_recon.size(
+                0), std_recon.size(1), 'gauss').to(device)
+            self.z_attr_recon = torch.add(
+                eps_recon.mul(std_recon), self.mu_recon)
+        else:
+            self.z_attr_recon = self.enc_a.forward(
+                self.fake_encoded_img, self.c_org)
+        self.z_attr_recon_a, self.z_attr_recon_b = torch.split(
+            self.z_attr_recon, half_size, dim=0)
 
-                x[indices.bool()] = x_aug
-            # ----------------------
+        # second cross translation
+#         print('gen fakeA_recon')
+        self.fake_A_recon = self.gen.forward(
+            self.z_content_recon_a, self.z_attr_recon_a, c_org_A)
+#         print('gen fakeB_recon')
+        self.fake_B_recon = self.gen.forward(
+            self.z_content_recon_b, self.z_attr_recon_b, c_org_B)
 
-        # for visualization, log the first image of the first 6 batches
-        if self.count < 6:
-            img = x[0].detach().add(1.).div(2)
-            self.logger.experiment.add_image(
-                f'train_images/{self.count}', img, global_step=self.global_step)
-            self.count += 1
+        # for display
+        self.image_display = torch.cat((self.real_A[0:1].detach().cpu(), self.fake_B_encoded[0:1].detach().cpu(),
+                                        self.fake_B_random[0:1].detach().cpu(), self.fake_AA_encoded[0:1].detach(
+        ).cpu(), self.fake_A_recon[0:1].detach().cpu(),
+            self.real_B[0:1].detach().cpu(
+        ), self.fake_A_encoded[0:1].detach().cpu(),
+            self.fake_A_random[0:1].detach().cpu(), self.fake_BB_encoded[0:1].detach().cpu(), self.fake_B_recon[0:1].detach().cpu()), dim=0)
 
-        # forward
-        y_hat = self.forward(x)
+        # for latent regression
+        self.fake_random_img = torch.cat(
+            (self.fake_A_random, self.fake_B_random), 0)
+        if self.concat:
+            self.mu2, _ = self.enc_a.forward(self.fake_random_img, self.c_org)
+            self.mu2_a, self.mu2_b = torch.split(self.mu2, half_size, 0)
+        else:
+            self.z_attr_random = self.enc_a.forward(
+                self.fake_random_img, self.c_org)
+            self.z_attr_random_a, self.z_attr_random_b = torch.split(
+                self.z_attr_random, half_size, 0)
 
-        # compute and log loss
-        loss = F.binary_cross_entropy_with_logits(
-            y_hat, y, pos_weight=self.weight.to(self.device))
-        self.log('train_loss', loss, on_epoch=True)
+#         print('forward done')
 
-        # log metrics
-        logits = torch.sigmoid(y_hat.detach())
-        preds = torch.round(logits)
+    def update_D_content(self, image, c_org,isVal =False):
+        self.input = image
+        self.z_content = self.enc_c.forward(self.input)
+        self.disContent_opt.zero_grad()
+        pred_cls = self.disContent.forward(self.z_content.detach())
+        loss_D_content = self.cls_loss(pred_cls, c_org)
+        if not isVal :
+            loss_D_content.backward()
+        self.disContent_loss = loss_D_content.item()
+        nn.utils.clip_grad_norm_(self.disContent.parameters(), 5)
+        if not isVal:
+            self.disContent_opt.step()
 
-        # log accuracy
-        self.log('train_metrics/acc', metrics.classification.accuracy(preds,
-                 y, num_classes=2), on_epoch=True)
+    def update_D(self, image, c_org,isVal =False):
+        self.input = image
+        self.c_org = c_org
+        self.forward()
 
-        # log tp, fp, tn, fn
-        cm = metrics.confusion_matrix(preds, y, num_classes=2)
+        self.dis1_opt.zero_grad()
+        self.D1_gan_loss, self.D1_cls_loss,self.D1_fake_gan_loss,self.D1_true_gan_loss = self.backward_D(
+            self.dis1, self.input, self.fake_encoded_img,isVal)
+        if not isVal:
+            self.dis1_opt.step()
 
-        return {'loss': loss, 'outputs': logits, 'targets': y, 'cm': cm}
+        self.dis2_opt.zero_grad()
+        self.D2_gan_loss, self.D2_cls_loss,self.D2_fake_gan_loss,self.D2_true_gan_loss = self.backward_D(
+            self.dis2, self.input, self.fake_random_img,isVal)
+        if not isVal:
+            self.dis2_opt.step()
+        return
+    def backward_D(self, netD, real, fake,isVal =False):
+        pred_fake, pred_fake_cls = netD.forward(fake.detach())
+        pred_real, pred_real_cls = netD.forward(real)
+        ad_fake_loss_values = 0
+        ad_true_loss_values = 0
+        loss_D_gan = 0
+        for it, (out_a, out_b) in enumerate(zip(pred_fake, pred_real)):
+            out_fake = torch.sigmoid(out_a)
+            out_real = torch.sigmoid(out_b)
+            all0 = torch.zeros_like(out_fake)
+            all1 = torch.ones_like(out_real)
+            ad_fake_loss = nn.functional.binary_cross_entropy(out_fake, all0)
+            ad_true_loss = nn.functional.binary_cross_entropy(out_real, all1)
+            ad_fake_loss_values += ad_fake_loss
+            ad_true_loss_values += ad_true_loss
+            loss_D_gan += ad_true_loss + ad_fake_loss
 
-    def training_epoch_end(self, train_outputs):
-        logits = torch.cat([batch['outputs']
-                           for batch in train_outputs]).squeeze(-1)
-        targets = torch.cat([batch['targets']
-                            for batch in train_outputs]).squeeze(-1)
+        loss_D_cls = self.cls_loss(pred_real_cls, self.c_org)
+        loss_D = loss_D_gan + self.opts.lambda_cls * loss_D_cls
+        if not isVal:
+            loss_D.backward()
+        return loss_D_gan, loss_D_cls,ad_fake_loss_values,ad_true_loss_values
 
-        # compute AUC of precision-recalll-curve
-        # initialize (otherwise breaks in fast dev run)
-        pr_auc = - torch.ones(1)
-        if targets.sum() > 0.:
-            precision, recall, _ = metrics.precision_recall_curve(
-                logits, targets)
-            pr_auc = metrics.classification.auc(recall, precision)
-        self.log('train_metrics/PR_AUC', pr_auc, on_epoch=True)
+    def update_EG(self,isVal= False):
+        # update G, Ec, Ea
+        self.enc_c_opt.zero_grad()
+        self.enc_a_opt.zero_grad()
+        self.gen_opt.zero_grad()
+        self.backward_EG(isVal)
+        self.backward_G_alone(isVal)
+        if not isVal:
+            self.enc_c_opt.step()
+            self.enc_a_opt.step()
+            self.gen_opt.step()
 
-        cm = torch.stack([batch['cm'] for batch in train_outputs]).sum(dim=0)
+    def backward_EG(self,isVal=False):
+        # content Ladv for generator
+        loss_G_GAN_content = self.backward_G_GAN_content(self.z_content)
 
-        if (cm[0, 0] + cm[1, 0]) > 0. and (cm[0, 0] + cm[0, 1]) > 0. and (cm[1, 1] + cm[0, 1]) > 0. and (cm[1, 1] + cm[1, 0]) > 0.:
-            # log precision and recall
-            prec_n = cm[0, 0] / (cm[0, 0] + cm[1, 0])
-            recall_n = cm[0, 0] / (cm[0, 0] + cm[0, 1])
-            prec_t = cm[1, 1] / (cm[1, 1] + cm[0, 1])
-            recall_t = cm[1, 1] / (cm[1, 1] + cm[1, 0])
-            self.log('train_metrics/precision_normal', prec_n, on_epoch=True)
-            self.log('train_metrics/recall_normal', recall_n, on_epoch=True)
-            self.log('train_metrics/precision_tumor', prec_t, on_epoch=True)
-            self.log('train_metrics/recall_tumor', recall_t, on_epoch=True)
+        # Ladv for generator
+        pred_fake, pred_fake_cls = self.dis1.forward(self.fake_encoded_img)
+        loss_G_GAN = 0
+        for out_a in pred_fake:
+            outputs_fake = torch.sigmoid(out_a)
+            all_ones = torch.ones_like(outputs_fake)
+            loss_G_GAN += nn.functional.binary_cross_entropy(
+                outputs_fake, all_ones)
 
-            cm_figure = plot_confusion_matrix(
-                cm.cpu().numpy(), ['normal', 'tumor'])
-            self.logger.experiment.add_figure(
-                'confusion_matrix/train', cm_figure, global_step=self.global_step)
+        # classification
+        loss_G_cls = self.cls_loss(
+            pred_fake_cls, self.c_org) * self.opts.lambda_cls_G
 
-            # log F1 score
-            self.log('train_metrics/F1_normal', 2 *
-                     prec_n * recall_n / (prec_n + recall_n))
-            self.log('train_metrics/F1_tumor', 2 *
-                     prec_t * recall_t / (prec_t + recall_t))
+        # self and cross-cycle recon
+        loss_G_L1_self = torch.mean(torch.abs(
+            self.input - torch.cat((self.fake_AA_encoded, self.fake_BB_encoded), 0))) * self.opts.lambda_rec
+        loss_G_L1_cc = torch.mean(torch.abs(
+            self.input - torch.cat((self.fake_A_recon, self.fake_B_recon), 0))) * self.opts.lambda_rec
 
-    def validation_step(self, batch, batch_idx):
-        x, y = batch
+        # KL loss - z_c
+        loss_kl_zc = self._l2_regularize(self.z_content) * 0.01
 
-        # forward
-        y_hat = self.forward(x)
+        # KL loss - z_a
+        if self.concat:
+            kl_element = torch.add(
+                (- torch.add(self.mu.pow(2), self.logvar.exp())) + 1, self.logvar)
+            loss_kl_za = torch.sum(kl_element) * (-0.5) * 0.01
+        else:
+            loss_kl_za = self._l2_regularize(self.z_attr) * 0.01
 
-        # compute and log loss
-        loss = F.binary_cross_entropy_with_logits(
-            y_hat, y, pos_weight=self.weight.to(self.device))
-        self.log('val_loss', loss, on_epoch=True)
+        loss_G = loss_G_GAN + loss_G_cls + loss_G_L1_self + \
+            loss_G_L1_cc + loss_kl_zc + loss_kl_za
+        loss_G += loss_G_GAN_content
+        if not isVal:
+            loss_G.backward(retain_graph=True)
+        self.gan_loss = loss_G_GAN.item()
+        self.gan_cls_loss = loss_G_cls.item()
+        self.gan_loss_content = loss_G_GAN_content.item()
+        self.kl_loss_zc = loss_kl_zc.item()
+        self.kl_loss_za = loss_kl_za.item()
+        self.l1_self_rec_loss = loss_G_L1_self.item()
+        self.l1_cc_rec_loss = loss_G_L1_cc.item()
+        self.G_loss = loss_G.item()
 
-        # log metrics
-        logits = torch.sigmoid(y_hat.detach())
-        preds = torch.round(logits)
+        return
 
-        # log accuracy
-        self.log('val_metrics/acc', metrics.classification.accuracy(preds,
-                 y, num_classes=2), on_epoch=True)
 
-        # log tp, fp, tn, fn
-        cm = metrics.confusion_matrix(preds, y, num_classes=2)
+    def backward_G_GAN_content(self, data):
+        pred_cls = self.disContent.forward(data)
+        loss_G_content = self.cls_loss(pred_cls, 1-self.c_org)
+        return loss_G_content
 
-        return {'loss': loss, 'outputs': logits, 'targets': y, 'cm': cm}
+    def backward_G_alone(self,isVal):
+        # Ladv for generator
+        pred_fake, pred_fake_cls = self.dis2.forward(self.fake_random_img)
+        loss_G_GAN2 = 0
+        for out_a in pred_fake:
+            outputs_fake = torch.sigmoid(out_a)
+            all_ones = torch.ones_like(outputs_fake)
+            loss_G_GAN2 += nn.functional.binary_cross_entropy(
+                outputs_fake, all_ones)
 
-    def validation_epoch_end(self, val_outputs):
-        logits = torch.cat([batch['outputs']
-                           for batch in val_outputs]).squeeze(-1)
-        targets = torch.cat([batch['targets']
-                            for batch in val_outputs]).squeeze(-1)
+        # classification
+        loss_G_cls2 = self.cls_loss(
+            pred_fake_cls, self.c_org) * self.opts.lambda_cls_G
 
-        # compute AUC of precision-recalll-curve
-        # initialize (otherwise breaks in fast dev run)
-        pr_auc = - torch.ones(1)
-        if targets.sum() > 0.:
-            precision, recall, _ = metrics.precision_recall_curve(
-                logits, targets)
-            pr_auc = metrics.classification.auc(recall, precision)
+        # latent regression loss
+        if self.concat:
+            loss_z_L1_a = torch.mean(
+                torch.abs(self.mu2_a - self.z_random)) * 10
+            loss_z_L1_b = torch.mean(
+                torch.abs(self.mu2_b - self.z_random)) * 10
+        else:
+            loss_z_L1_a = torch.mean(
+                torch.abs(self.z_attr_random_a - self.z_random)) * 10
+            loss_z_L1_b = torch.mean(
+                torch.abs(self.z_attr_random_b - self.z_random)) * 10
 
-            # plot the PR curve
-            fig = plt.figure()
-            tumor_ratio = len(targets[targets == 1.]) / len(targets)
-            plt.plot([0, 1], [tumor_ratio, tumor_ratio],
-                     linestyle='--', label='random')
-            plt.plot(recall.cpu(), precision.cpu(),
-                     marker='.', label='our model')
-            plt.xlabel('Recall')
-            plt.ylabel('Precision')
-            plt.legend()
-            self.logger.experiment.add_figure(
-                'prec-recall-curve', fig, global_step=self.global_step)
-        self.log('val_metrics/PR_AUC', pr_auc, on_epoch=True)
-        # logged separately for model checkpoint callback
-        self.log('PR_AUC', pr_auc, on_epoch=True)
+        loss_z_L1 = loss_z_L1_a + loss_z_L1_b + loss_G_GAN2 + loss_G_cls2
+        if not isVal:
+            loss_z_L1.backward()
+        self.l1_recon_z_loss = loss_z_L1_a.item() + loss_z_L1_b.item()
+        self.gan2_loss = loss_G_GAN2.item()
+        self.gan2_cls_loss = loss_G_cls2.item()
 
-        # compute metrics based on confusion matrix
-        cm = torch.stack([batch['cm'] for batch in val_outputs]).sum(dim=0)
+    def _l2_regularize(self, mu):
+        mu_2 = torch.pow(mu, 2)
+        encoding_loss = torch.mean(mu_2)
+        return encoding_loss
 
-        if (cm[0, 0] + cm[1, 0]) > 0. and (cm[0, 0] + cm[0, 1]) and (cm[1, 1] + cm[0, 1]) and (cm[1, 1] + cm[1, 0]):
-            # log precision and recall
-            prec_n = cm[0, 0] / (cm[0, 0] + cm[1, 0])
-            recall_n = cm[0, 0] / (cm[0, 0] + cm[0, 1])
-            prec_t = cm[1, 1] / (cm[1, 1] + cm[0, 1])
-            recall_t = cm[1, 1] / (cm[1, 1] + cm[1, 0])
-            self.log('val_metrics/precision_normal', prec_n, on_epoch=True)
-            self.log('val_metrics/recall_normal', recall_n, on_epoch=True)
-            self.log('val_metrics/precision_tumor', prec_t, on_epoch=True)
-            self.log('val_metrics/recall_tumor', recall_t, on_epoch=True)
+    def update_lr(self):
+        self.dis1_sch.step()
+        self.dis2_sch.step()
+        self.enc_c_sch.step()
+        self.enc_a_sch.step()
+        self.gen_sch.step()
 
-            cm_figure = plot_confusion_matrix(
-                cm.cpu().numpy(), ['normal', 'tumor'])
-            self.logger.experiment.add_figure(
-                'confusion_matrix/val', cm_figure, global_step=self.global_step)
+    def assemble_outputs(self):
+        images_a = self.normalize_image(self.real_A).detach()
+        images_b = self.normalize_image(self.real_B).detach()
+        images_a1 = self.normalize_image(self.fake_A_encoded).detach()
+        images_a2 = self.normalize_image(self.fake_A_random).detach()
+        images_a3 = self.normalize_image(self.fake_A_recon).detach()
+        images_a4 = self.normalize_image(self.fake_AA_encoded).detach()
+        images_b1 = self.normalize_image(self.fake_B_encoded).detach()
+        images_b2 = self.normalize_image(self.fake_B_random).detach()
+        images_b3 = self.normalize_image(self.fake_B_recon).detach()
+        images_b4 = self.normalize_image(self.fake_BB_encoded).detach()
+        row1 = torch.cat((images_a[0:1, ::], images_b1[0:1, ::],
+                         images_b2[0:1, ::], images_a4[0:1, ::], images_a3[0:1, ::]), 3)
+        row2 = torch.cat((images_b[0:1, ::], images_a1[0:1, ::],
+                         images_a2[0:1, ::], images_b4[0:1, ::], images_b3[0:1, ::]), 3)
+        return torch.cat((row1, row2), 2)
 
-            # log F1 score
-            self.log('val_metrics/F1_normal', 2 * prec_n *
-                     recall_n / (prec_n + recall_n))
-            self.log('val_metrics/F1_tumor', 2 * prec_t *
-                     recall_t / (prec_t + recall_t))
-            self.log('F1_tumor', 2 * prec_t * recall_t / (prec_t + recall_t))
+    def normalize_image(self, x):
+        return x[:, 0:3, :, :]
 
-        # compute area under the precision-recall curve
-        if pr_auc.item() > self.hp_metric:
-            self.logger.experiment.add_scalar(
-                'hp_metric', pr_auc, global_step=0)
-            self.hp_metric = pr_auc.item()
-
-    def test_step(self, batch, batch_idx):
-        x, y = batch
-
-        # forward pass
-        y_hat = self.forward(x)
-
-        # compute and log loss
-        loss = F.binary_cross_entropy_with_logits(
-            y_hat, y, pos_weight=self.weight.to(self.device))
-        self.log('test_loss', loss, on_epoch=True)
-
-        # log metrics
-        logits = torch.sigmoid(y_hat.detach())
-        preds = torch.round(logits)
-
-        # log accuracy
-        self.log('test_metrics/acc', metrics.classification.accuracy(preds,
-                 y, num_classes=2), on_epoch=True)
-
-        # log tp, fp, tn, fn
-        cm = metrics.confusion_matrix(preds, y, num_classes=2)
-
-        return {'loss': loss, 'outputs': logits, 'targets': y, 'cm': cm}
-
-    def test_epoch_end(self, test_outputs):
-        logits = torch.cat([batch['outputs'] for batch in test_outputs]).squeeze(-1)
-        targets = torch.cat([batch['targets'] for batch in test_outputs]).squeeze(-1)
-
-        # compute AUC of precision-recalll-curve
-        # initialize (otherwise breaks in fast dev run) ß
-        pr_auc = - torch.ones(1)
-        if targets.sum() > 0.:
-            precision, recall, _ = metrics.precision_recall_curve(
-                logits, targets)
-            pr_auc = metrics.classification.auc(recall, precision)
-        self.log('test_metrics/PR_AUC', pr_auc, on_epoch=True)
-
-        # compute metrics based on confusion matrix
-        cm = torch.stack([batch['cm'] for batch in test_outputs]).sum(dim=0)
-
-        # log precision and recall
-        prec_n = cm[0, 0] / (cm[0, 0] + cm[1, 0])
-        recall_n = cm[0, 0] / (cm[0, 0] + cm[0, 1])
-        prec_t = cm[1, 1] / (cm[1, 1] + cm[0, 1])
-        recall_t = cm[1, 1] / (cm[1, 1] + cm[1, 0])
-        self.log('test_metrics/precision_normal', prec_n, on_epoch=True)
-        self.log('test_metrics/recall_normal', recall_n, on_epoch=True)
-        self.log('test_metrics/precision_tumor', prec_t, on_epoch=True)
-        self.log('test_metrics/recall_tumor', recall_t, on_epoch=True)
-
-        cm_figure = plot_confusion_matrix(
-            cm.cpu().numpy(), ['normal', 'tumor'])
-        self.logger.experiment.add_figure(
-            'confusion_matrix/test', cm_figure, global_step=self.global_step)
-
-        # log F1 score
-        self.log('test_metrics/F1_normal', 2 *
-                 prec_n * recall_n / (prec_n + recall_n))
-        self.log('test_metrics/F1_tumor', 2 * prec_t *
-                 recall_t / (prec_t + recall_t))
-
-        return {
-            'precision_normal': prec_n,
-            'recall_normal': recall_n,
-            'precision_tumor': prec_t,
-            'recall_tumor': recall_t,
-            'confusion_matrix_00': cm[0, 0],
-            'confusion_matrix_01': cm[0, 1],
-            'confusion_matrix_10': cm[1, 0],
-            'confusion_matrix_11': cm[1, 1],
-            'F1_normal': 2 * prec_n * recall_n / (prec_n + recall_n),
-            'F1_tumor': 2 * prec_t * recall_t / (prec_t + recall_t),
-            'PR_AUC': pr_auc,
+    def save(self, filename, ep, total_it):
+        state = {
+            'dis1': self.dis1.state_dict(),
+            'dis2': self.dis2.state_dict(),
+            'disContent': self.disContent.state_dict(),
+            'enc_c': self.enc_c.state_dict(),
+            'enc_a': self.enc_a.state_dict(),
+            'gen': self.gen.state_dict(),
+            'dis1_opt': self.dis1_opt.state_dict(),
+            'dis2_opt': self.dis2_opt.state_dict(),
+            'disContent_opt': self.disContent_opt.state_dict(),
+            'enc_c_opt': self.enc_c_opt.state_dict(),
+            'enc_a_opt': self.enc_a_opt.state_dict(),
+            'gen_opt': self.gen_opt.state_dict(),
+            'ep': ep,
+            'total_it': total_it
         }
-
-    def configure_optimizers(self):
-        return torch.optim.Adam(
-            self.parameters(),
-            lr=self.hparams.learning_rate,
-            weight_decay=self.hparams.l2_reg
-        )
-
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--learning_rate', type=float, default=0.0001)
-        parser.add_argument('--l2_reg', type=float, default=1e-06)
-        return parser
+        torch.save(state, filename)
+        return
+    def resume(self, model_dir, train=True):
+        checkpoint = torch.load(model_dir, map_location=torch.device('cpu'))
+        # weight
+        if train:
+            self.dis1.load_state_dict(checkpoint['dis1'])
+            self.dis2.load_state_dict(checkpoint['dis2'])
+            self.disContent.load_state_dict(checkpoint['disContent'])
+        self.enc_c.load_state_dict(checkpoint['enc_c'])
+        self.enc_a.load_state_dict(checkpoint['enc_a'])
+        self.gen.load_state_dict(checkpoint['gen'])
+        # optimizer
+        if train:
+            self.dis1_opt.load_state_dict(checkpoint['dis1_opt'])
+            self.dis2_opt.load_state_dict(checkpoint['dis2_opt'])
+            self.disContent_opt.load_state_dict(checkpoint['disContent_opt'])
+            self.enc_c_opt.load_state_dict(checkpoint['enc_c_opt'])
+            self.enc_a_opt.load_state_dict(checkpoint['enc_a_opt'])
+            self.gen_opt.load_state_dict(checkpoint['gen_opt'])
+        return checkpoint['ep'], checkpoint['total_it']
